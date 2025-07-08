@@ -1,0 +1,92 @@
+# =================================================================
+#  Windows 系统特定文件 (Windows specific)
+# =================================================================
+# Windows 缩略图缓存
+Thumbs.db
+ehthumbs.db
+
+# Windows 桌面配置文件
+desktop.ini
+
+# Windows 回收站文件 (当使用命令行删除时可能产生)
+$RECYCLE.BIN/
+
+# Visual Studio / .NET 相关
+*.sln
+*.suo
+*.user
+*.vcxproj.filters
+*.vcxproj.user
+*.vcxproj
+*.csproj
+
+# =================================================================
+#  通用依赖项 (General Dependencies)
+# =================================================================
+# Node.js 依赖包文件夹，这是最重要的部分
+/node_modules
+
+# =================================================================
+#  构建产物和打包输出 (Build outputs)
+# =================================================================
+# Vite/Webpack 等工具打包后生成的文件夹
+/dist
+/build
+/out
+
+# Vercel, Netlify 等平台的部署输出
+.vercel
+.netlify
+
+# Next.js 项目的构建输出
+.next
+
+# =================================================================
+#  日志文件 (Log files)
+# =================================================================
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# =================================================================
+#  环境变量文件 (Environment Variables) - !! 安全警告 !!
+# =================================================================
+# 包含 API 密钥、数据库密码等敏感信息，绝对禁止上传！
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+# 保留 env.example 文件在版本控制中作为模板
+
+# =================================================================
+#  IDE 和编辑器配置文件 (IDE & Editor configs)
+# =================================================================
+# Visual Studio Code
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+# ^ 上面的规则表示：忽略 .vscode 文件夹里的所有内容，
+#   但团队共享的设置文件除外。如果你是个人开发，直接用 .vscode/ 即可。
+
+# JetBrains (WebStorm, IntelliJ)
+.idea/
+
+# =================================================================
+#  缓存文件 (Cache files)
+# =================================================================
+.eslintcache
+.stylelintcache
+.prettiercache
+.vite-plugin-eslint.cache
+
+# =================================================================
+#  macOS 系统文件 (macOS specific) - 加上无妨
+# =================================================================
+# 即使你在 Windows 上开发，你的同事可能用 Mac
+.DS_Store
+.AppleDouble
+.LSOverride
