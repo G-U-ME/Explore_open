@@ -82,7 +82,7 @@ function App() {
   const { projects, activeProjectId, setActiveProject, createProject, updateProject } = useProjectStore();
 
   // <<< CHANGE 2: Define leftPanelWidth dynamically inside the component
-  const leftPanelWidth = windowWidth < 1080 ? 180 : 280;
+  const leftPanelWidth = windowWidth < 1080 ? 200 : 300;
 
   useEffect(() => {
     // One-time data migration from old format
