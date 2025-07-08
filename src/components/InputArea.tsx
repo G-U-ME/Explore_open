@@ -354,26 +354,26 @@ export const InputArea: React.FC = () => {
                   </div>
                 )}
               </div>
-
-              <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-full hover:bg-[#5E5E5E] transition-colors">
-                <Paperclip size={18} />
-              </button>
             </div>
 
             {/* Right button: Send */}
-            <button
-              onClick={handleSend}
-              disabled={isTyping || (!inputText.trim() && filePreviews.length === 0 && !selectedContent)}
-              className="bg-[#4C4C4C] text-[#13E425] w-9 h-9 flex items-center justify-center rounded-full shadow-[0_4px_4px_rgba(0,0,0,0.25)] hover:bg-[#5C5C5C] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-              title="发送消息"
-            >
-              <Send size={18} />
-            </button>
+            <div className="flex items-center gap-2">
+              <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-full hover:bg-[#5E5E5E] transition-colors">
+                <Paperclip size={18} />
+              </button>
+
+              <button
+                onClick={handleSend}
+                disabled={isTyping || (!inputText.trim() && filePreviews.length === 0 && !selectedContent)}
+                className="bg-[#4C4C4C] text-[#13E425] w-9 h-9 flex items-center justify-center rounded-full shadow-[0_4px_4px_rgba(0,0,0,0.25)] hover:bg-[#5C5C5C] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                title="发送消息"
+              >
+                <Send size={18} />
+              </button>
+            </div>
           </div>
         </div>
       </div>
-
-      {/* Removed ApiKeyInput as it's now in Settings */}
 
       <input
         ref={fileInputRef}
