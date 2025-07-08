@@ -25,7 +25,8 @@ const useInputAreaHeight = () => {
   return { inputAreaHeight, inputAreaRef };
 };
 
-const LEFT_PANEL_WIDTH = 280;
+// <<< CHANGE 1: REMOVED the constant from here
+// const LEFT_PANEL_WIDTH = 280; 
 const RIGHT_PANEL_WIDTH = 300;
 
 // ... (ErrorBoundary code is correct and remains unchanged) ...
@@ -80,6 +81,9 @@ function App() {
   
   const { projects, activeProjectId, setActiveProject, createProject, updateProject } = useProjectStore();
 
+  // <<< CHANGE 2: Define leftPanelWidth dynamically inside the component
+  const leftPanelWidth = windowWidth < 1080 ? 180 : 280;
+
   useEffect(() => {
     // One-time data migration from old format
     const oldDataRaw = localStorage.getItem('ai-card-tree-storage');
@@ -121,7 +125,8 @@ function App() {
   const screenHeight = window.innerHeight;
   const availableHeight = screenHeight - inputAreaHeight;
   const cardCenterY = availableHeight / 2;
-  const centerAreaWidth = windowWidth - LEFT_PANEL_WIDTH - RIGHT_PANEL_WIDTH;
+  // <<< CHANGE 3: Use the new dynamic variable here
+  const centerAreaWidth = windowWidth - leftPanelWidth - RIGHT_PANEL_WIDTH;
   const activeProject = projects.find(p => p.id === activeProjectId);
 
   return (
@@ -131,7 +136,8 @@ function App() {
         <div
           className="absolute top-0 bottom-0 z-0"
           style={{
-            left: `${LEFT_PANEL_WIDTH}px`,
+            // <<< CHANGE 4: Use the new dynamic variable here
+            left: `${leftPanelWidth}px`,
             right: `${RIGHT_PANEL_WIDTH}px`,
           }}
         >
@@ -155,7 +161,10 @@ function App() {
         {/* Left Panel Container: REMOVED border-r */}
         <div
           className="absolute top-0 left-0 h-full z-10 pointer-events-none"
-          style={{ width: `${LEFT_PANEL_WIDTH}px` }}
+          style={{ 
+            // <<< CHANGE 5: Use the new dynamic variable here
+            width: `${leftPanelWidth}px` 
+          }}
         >
           <div className="w-full h-full pointer-events-auto">
             <ProjectPanel />
@@ -176,7 +185,8 @@ function App() {
           ref={inputAreaRef}
           className="absolute bottom-0 z-10"
           style={{
-            left: `${LEFT_PANEL_WIDTH}px`,
+            // <<< CHANGE 6: Use the new dynamic variable here
+            left: `${leftPanelWidth}px`,
             right: `${RIGHT_PANEL_WIDTH}px`,
           }}
         >
