@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import useCardStore, { CardData } from '../stores/cardStore';
 // 1. 导入 FileText 和 Image 用于显示附件，删除了不再使用的 Plus
-import { X, ZoomIn, FileText, Image } from 'lucide-react'; 
+import { X, ZoomIn, FileText } from 'lucide-react'; 
 import { useProjectStore } from '../stores/projectStore';
 
 // 计算卡片位置函数，使用固定角度步长 (无需修改)
