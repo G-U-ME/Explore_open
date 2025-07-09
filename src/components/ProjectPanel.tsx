@@ -64,7 +64,7 @@ const SortableProjectItem: React.FC<{
       }}
       className={`group p-3 rounded-xl cursor-pointer transition-colors relative ${
         isActive
-          ? 'bg-[#4A4A4A]'
+          ? 'bg-[#5A5A5A]'
           : 'bg-[#3A3A3A] hover:bg-[#4A4A4A]'
       }`}
     >
