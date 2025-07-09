@@ -64,8 +64,8 @@ const SortableProjectItem: React.FC<{
       }}
       className={`group p-3 rounded-xl cursor-pointer transition-colors relative ${
         isActive
-          ? 'bg-[#5C5C5C]'
-          : 'bg-[#4C4C4C] hover:bg-[#555555]'
+          ? 'bg-[#4A4A4A]'
+          : 'bg-[#3A3A3A] hover:bg-[#4A4A4A]'
       }`}
     >
       <div className="flex items-center justify-center">
