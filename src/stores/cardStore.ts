@@ -103,18 +103,21 @@ function deduplicateCards(cards: CardData[]): CardData[] {
   });
 }
 
-
-// 从环境变量获取API URL
-const SILICONFLOW_API_URL = import.meta.env.VITE_SILICONFLOW_API_URL || 'https://api.siliconflow.cn/v1/chat/completions';
-
 /**
  * 根据消息记录调用AI API生成标题。
  * @param messages 卡片中的消息数组
  * @param apiKey 从Store中获取的API Key
+ * @param apiUrl 从Store中获取的API URL
+ * @param model 用于生成标题的模型名称 (现在是激活的模型)
  * @returns AI生成的标题或备用标题
  */
-async function generateTitleFromMessages(messages: CardMessage[], apiKey: string | null): Promise<string> {
+async function generateTitleFromMessages(messages: CardMessage[], apiKey: string | null, apiUrl: string, model: string | undefined): Promise<string> {
   if (messages.length === 0) return '新卡片';
+
+  const fallback = () => {
+    const fallbackContent = messages.slice(-1)[0]?.content || '新卡片';
+    return fallbackContent.substring(0, 15);
+  }
 
   // 构建prompt
   const recentMessages = messages.slice(-10);
@@ -123,22 +126,21 @@ async function generateTitleFromMessages(messages: CardMessage[], apiKey: string
     .join('\n');
   const prompt = `请用一个名词短语精简概括以下对话的主题，并且最终只输出名词短语：\n\n${conversationContent}`;
 
-  // 检查传入的apiKey
-  if (!apiKey) {
-    console.warn('用于生成标题的API Key未配置，将使用备用方案。');
-    const fallbackContent = messages.slice(-1)[0]?.content || '新卡片';
-    return fallbackContent.substring(0, 15);
+  // 检查所有必要的配置
+  if (!apiKey || !apiUrl || !model) {
+    console.warn('用于生成标题的 API Key, API URL 或模型未配置，将使用备用方案。');
+    return fallback();
   }
 
   try {
-    const response = await fetch(SILICONFLOW_API_URL, {
+    const response = await fetch(apiUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
-        'Authorization': `Bearer ${apiKey}` // 使用传入的apiKey
+        'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: 'deepseek-ai/DeepSeek-R1-0528-Qwen3-8B',
+        model: model, // 使用传入的激活模型
         stream: false,
         messages: [{ role: 'user', content: prompt }]
       }),
@@ -146,7 +148,9 @@ async function generateTitleFromMessages(messages: CardMessage[], apiKey: string
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`API请求失败: ${response.status} - ${errorText}`);
+      // 在此记录详细错误，以便调试
+      console.error(`API请求失败: ${response.status} - ${errorText}`);
+      throw new Error(`API请求失败: ${response.status}`);
     }
 
     const data = await response.json();
@@ -159,16 +163,16 @@ async function generateTitleFromMessages(messages: CardMessage[], apiKey: string
     }
 
   } catch (error) {
+    // 捕获上面抛出的错误或fetch自身的网络错误
     console.error('调用AI生成标题失败:', error);
-    const fallbackContent = messages.slice(-1)[0]?.content || '新卡片';
-    return fallbackContent.substring(0, 15);
+    return fallback();
   }
 }
 
+
 const useCardStore = create<CardState>()(
-  devtools( // Removed persist from here, as projectStore handles persistence
+  devtools(
     (set, get) => ({
-      // cards and currentCardId are removed from the initial state
       selectedContent: null,
       isTyping: false,
 
@@ -273,9 +277,12 @@ const useCardStore = create<CardState>()(
         const card = cards.find(c => c.id === id)
         if (!card) return;
 
-        // Get the latest API key directly from settingsStore
-        const { apiKey } = useSettingsStore.getState();
-        const title = await generateTitleFromMessages(card.messages, apiKey);
+        // 从 settingsStore 获取包括 activeModel 在内的所有配置
+        const { apiKey, apiUrl, activeModel } = useSettingsStore.getState();
+        
+        // 调用辅助函数，传入激活的模型
+        const title = await generateTitleFromMessages(card.messages, apiKey, apiUrl, activeModel);
+        
         get().updateCard(id, { title });
       },
 
@@ -303,7 +310,6 @@ const useCardStore = create<CardState>()(
     }),
     {
       name: 'explore-card-storage',
-      // The old storage key. We can remove the whole persist middleware now.
     }
   )
 );

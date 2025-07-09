@@ -1,15 +1,18 @@
-import React, { useState, useRef, useEffect } from 'react'
-import { Send, Paperclip, FileText, Image, X, ChevronDown } from 'lucide-react'
-import useCardStore from '../stores/cardStore'
-import { useSettingsStore } from '../stores/settingsStore'
-import type { CardMessage } from '../stores/cardStore'
-import { useProjectStore } from '../stores/projectStore'
+
+
+import React, { useState, useRef, useEffect } from 'react';
+import { Send, Paperclip, FileText, Image, X, ChevronDown, Globe } from 'lucide-react';
+import useCardStore from '../stores/cardStore';
+import { useSettingsStore } from '../stores/settingsStore';
+import type { CardMessage } from '../stores/cardStore';
+import { useProjectStore } from '../stores/projectStore';
 
 interface FilePreview {
-  id: string
-  name: string
-  type: string
-  url: string
+  id: string;
+  name: string;
+  type: string;
+  url: string; 
+  dataUrl?: string; 
 }
 
 export const InputArea: React.FC = () => {
@@ -18,122 +21,128 @@ export const InputArea: React.FC = () => {
     appendMessage, 
     updateMessage, 
     setIsTyping: setGlobalIsTyping, 
+    // 【改动】获取 selectedContent 和其 setter
     selectedContent, 
     setSelectedContent,
-  } = useCardStore()
+  } = useCardStore();
   
   const { projects, activeProjectId } = useProjectStore();
   const activeProject = projects.find(p => p.id === activeProjectId);
   const cards = activeProject?.cards || [];
   const currentCardId = activeProject?.currentCardId || null;
 
-  const { apiUrl, apiKey, models } = useSettingsStore();
+  const { apiUrl, apiKey, models, activeModel, setActiveModel } = useSettingsStore();
 
-  const [inputText, setInputText] = useState('')
-  const [filePreviews, setFilePreviews] = useState<FilePreview[]>([])
-  const [isTyping, setLocalIsTyping] = useState(false)
-  const [currentModel, setCurrentModel] = useState(models[0] || '');
-  const [showModelDropdown, setShowModelDropdown] = useState(false)
-  const fileInputRef = useRef<HTMLInputElement>(null)
-  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const [inputText, setInputText] = useState('');
+  const [filePreviews, setFilePreviews] = useState<FilePreview[]>([]);
+  const [isTyping, setLocalIsTyping] = useState(false);
+  const [showModelDropdown, setShowModelDropdown] = useState(false);
+  const [isWebSearchEnabled, setIsWebSearchEnabled] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  const currentCard = cards.find(card => card.id === currentCardId)
+  const currentCard = cards.find(card => card.id === currentCardId);
 
   useEffect(() => {
-    if (models.length > 0 && !models.includes(currentModel)) {
-      setCurrentModel(models[0]);
-    } else if (models.length === 0) {
-      setCurrentModel('');
+    if (models.length > 0 && !models.includes(activeModel)) {
+      setActiveModel(models[0]);
+    } else if (models.length === 0 && activeModel) {
+      setActiveModel('');
     }
-  }, [models, currentModel]);
+  }, [models, activeModel, setActiveModel]);
 
   const adjustTextareaHeight = () => {
     if (textareaRef.current) {
-      textareaRef.current.style.height = 'auto'
-      const scrollHeight = textareaRef.current.scrollHeight
-      const maxHeight = 6 * 24
-      textareaRef.current.style.height = `${Math.min(scrollHeight, maxHeight)}px`
+      textareaRef.current.style.height = 'auto';
+      const scrollHeight = textareaRef.current.scrollHeight;
+      const maxHeight = 6 * 24;
+      textareaRef.current.style.height = `${Math.min(scrollHeight, maxHeight)}px`;
     }
-  }
+  };
 
   useEffect(() => {
-    adjustTextareaHeight()
-  }, [inputText])
+    adjustTextareaHeight();
+  }, [inputText]);
 
   const handleSend = async () => {
-    const combinedPrompt = selectedContent
-      ? `Context:\n"""\n${selectedContent}\n"""\n\nQuestion:\n${inputText}`
-      : inputText
-
-    if (!combinedPrompt.trim() && filePreviews.length === 0) return
-
+    if (!inputText.trim() && filePreviews.length === 0 && !selectedContent) return;
     if (!apiKey?.trim() || !apiUrl.trim()) {
       alert('请在设置中配置您的 API URL 和 API Key');
-      return
+      return;
     }
-
-    if(models.length === 0 || !currentModel) {
-      alert('请在设置中添加至少一个模型');
+    if (models.length === 0 || !activeModel) {
+      alert('请在设置中添加至少一个可用模型');
       return;
     }
 
-    setLocalIsTyping(true)
-    setGlobalIsTyping(true)
+    setLocalIsTyping(true);
+    setGlobalIsTyping(true);
 
     try {
-      const userMsgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`
+      const userMsgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      
+      // 【改动】将文件信息（包括图像的dataUrl）序列化为JSON字符串
+      const encodedFiles = filePreviews.map(file => JSON.stringify({
+        name: file.name,
+        type: file.type,
+        dataUrl: file.type.startsWith('image/') ? file.dataUrl : undefined,
+      }));
+
       const userMsg: CardMessage = {
         id: userMsgId,
         role: 'user',
         content: inputText,
-        files: filePreviews.map(f => f.name),
-        context: selectedContent || undefined,
+        files: encodedFiles, // 使用编码后的文件信息
+        context: selectedContent || undefined, // context 字段用于存储选中的文本
         timestamp: Date.now()
-      }
+      };
 
-      let cardId = currentCardId
+      let cardId = currentCardId;
       if (cardId && currentCard) {
-        appendMessage(cardId, userMsg)
+        appendMessage(cardId, userMsg);
       } else {
-        addCard([userMsg])
-        // After addCard, the new cardId is in the project store
+        addCard([userMsg]);
         const { projects, activeProjectId } = useProjectStore.getState();
         cardId = projects.find(p => p.id === activeProjectId)?.currentCardId || null;
       }
+      
+      const promptToSend = selectedContent ? `Context:\n"""\n${selectedContent}\n"""\n\nQuestion:\n${inputText}` : inputText;
+      const filesToSend = [...filePreviews];
 
-      setInputText('')
-      setFilePreviews([])
-      setSelectedContent(null)
+      setInputText('');
+      // 【改动】清理文件和选中的文本
+      filePreviews.forEach(f => URL.revokeObjectURL(f.url)); // 释放内存
+      setFilePreviews([]);
+      setSelectedContent(null);
 
-      setTimeout(adjustTextareaHeight, 0)
+      setTimeout(adjustTextareaHeight, 0);
       
       if (cardId) {
-        await fetchLLMStream(cardId, combinedPrompt, userMsgId)
+        await fetchLLMStream(cardId, promptToSend, filesToSend, userMsgId);
       }
 
     } catch (error) {
-      console.error('发送消息时出错:', error)
-      alert('发送消息失败，请重试')
+      console.error('发送消息时出错:', error);
+      alert('发送消息失败，请重试');
     } finally {
-      setLocalIsTyping(false)
-      setGlobalIsTyping(false)
+      setLocalIsTyping(false);
+      setGlobalIsTyping(false);
     }
-  }
+  };
 
-  const fetchLLMStream = async (cardId: string, prompt: string, userMsgId?: string) => {
+  const fetchLLMStream = async (cardId: string, prompt: string, files: FilePreview[], userMsgId?: string) => {
     const aiMsgId = userMsgId ? `${userMsgId}_ai` : `msg_${Date.now()}_${Math.random().toString(36).slice(2)}_ai`;
-    let aiContent = ''
+    let aiContent = '';
     
     const initialAiMessage: CardMessage = {
       id: aiMsgId,
       role: 'ai',
       content: '',
       timestamp: Date.now()
-    }
-    appendMessage(cardId, initialAiMessage)
+    };
+    appendMessage(cardId, initialAiMessage);
 
     if (!apiUrl) {
-      console.error('API URL not found in settings');
       const errorMessage = 'API URL 未设置。';
       updateMessage(cardId, aiMsgId, { content: errorMessage });
       setLocalIsTyping(false);
@@ -142,56 +151,51 @@ export const InputArea: React.FC = () => {
     }
 
     try {
+      let messages: any[];
+      const imageFiles = files.filter(f => f.type.startsWith('image/') && f.dataUrl);
+      if (imageFiles.length > 0) {
+        const contentParts: any[] = [{ type: 'text', text: prompt }];
+        imageFiles.forEach(file => {
+          contentParts.push({
+            type: 'image_url',
+            image_url: { url: file.dataUrl },
+          });
+        });
+        messages = [{ role: 'user', content: contentParts }];
+      } else {
+        messages = [{ role: 'user', content: prompt }];
+      }
+      
+      const requestBody: any = { model: activeModel, stream: true, messages: messages };
+      if (imageFiles.length > 0) { requestBody.max_tokens = 4096; }
+      if (isWebSearchEnabled) { requestBody.enable_search = true; requestBody.search_options = { provider: "biying" }; }
+      
       const res = await fetch(apiUrl, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${apiKey}`
-        },
-        body: JSON.stringify({
-          model: currentModel,
-          stream: true,
-          messages: [{ role: 'user', content: prompt }]
-        }),
-      })
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify(requestBody), 
+      });
       
       if (!res.ok) {
         const errorBody = await res.text();
-        console.error('API Error:', res.status, res.statusText, errorBody);
-        throw new Error(`API请求失败: ${res.status} ${res.statusText}`)
+        throw new Error(`API请求失败: ${res.status} ${res.statusText} - ${errorBody}`);
       }
+      if (!res.body) throw new Error('No response body');
       
-      if (!res.body) throw new Error('No response body')
-      
-      const reader = res.body.getReader()
-      const decoder = new TextDecoder()
-      
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
       let buffer = '';
-
       mainReadLoop: while (true) {
         const { value, done } = await reader.read();
-        
-        if (done) {
-          break;
-        }
-        
+        if (done) break;
         buffer += decoder.decode(value, { stream: true });
-        
         let boundary;
         while ((boundary = buffer.indexOf('\n')) !== -1) {
             const line = buffer.substring(0, boundary).trim();
             buffer = buffer.substring(boundary + 1);
-
-            if (line === '' || !line.startsWith('data: ')) {
-                continue;
-            }
-            
+            if (line === '' || !line.startsWith('data: ')) continue;
             const data = line.substring(6);
-
-            if (data === '[DONE]') {
-                break mainReadLoop;
-            }
-
+            if (data === '[DONE]') break mainReadLoop;
             try {
                 const json = JSON.parse(data);
                 const delta = json.choices?.[0]?.delta?.content;
@@ -204,86 +208,74 @@ export const InputArea: React.FC = () => {
             }
         }
       }
-
-      if (buffer.length > 0) {
-        const line = buffer.trim();
-        if (line.startsWith('data: ') && !line.includes('[DONE]')) {
-            const data = line.substring(6);
-            try {
-                const json = JSON.parse(data);
-                const delta = json.choices?.[0]?.delta?.content;
-                if (delta) {
-                    aiContent += delta;
-                    updateMessage(cardId, aiMsgId, { content: aiContent });
-                }
-            } catch (parseError) {
-                console.warn('解析流末尾数据时出错 (已跳过):', parseError, 'in final buffer:', buffer);
-            }
-        }
-      }
-
     } catch (error) {
-      console.error('LLM API调用失败:', error)
-      const errorMessage = 'AI回复失败，请检查API Key或网络连接。';
+      console.error('LLM API调用失败:', error);
+      const errorMessage = 'AI回复失败，请检查模型是否支持视觉、API Key或网络连接。';
       updateMessage(cardId, aiMsgId, { content: errorMessage });
     } finally {
       setLocalIsTyping(false);
       setGlobalIsTyping(false);
     }
-  }
-
+  };
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files
-    if (!files) return
-
+    const files = event.target.files;
+    if (!files) return;
     Array.from(files).forEach(file => {
-      const fileId = `file_${Date.now()}_${Math.random().toString(36).slice(2)}`
-      const fileUrl = URL.createObjectURL(file)
-      
-      setFilePreviews(prev => [...prev, {
-        id: fileId,
-        name: file.name,
-        type: file.type,
-        url: fileUrl
-      }])
-    })
-    if(event.target) event.target.value = '';
-  }
+      const fileId = `file_${Date.now()}_${Math.random().toString(36).slice(2)}`;
+      const fileUrl = URL.createObjectURL(file);
+      const newFilePreview: FilePreview = { id: fileId, name: file.name, type: file.type, url: fileUrl };
+      if (file.type.startsWith('image/')) {
+        const reader = new FileReader();
+        reader.onload = (loadEvent) => {
+          const base64DataUrl = loadEvent.target?.result as string;
+          setFilePreviews(prev => prev.map(fp => fp.id === fileId ? { ...fp, dataUrl: base64DataUrl } : fp));
+        };
+        reader.onerror = (error) => { console.error('FileReader error:', error); removeFile(fileId); };
+        reader.readAsDataURL(file);
+      }
+      setFilePreviews(prev => [...prev, newFilePreview]);
+    });
+    if (event.target) event.target.value = '';
+  };
 
   const removeFile = (id: string) => {
     setFilePreviews(prev => {
-      const file = prev.find(f => f.id === id)
-      if (file) URL.revokeObjectURL(file.url)
-      return prev.filter(f => f.id !== id)
-    })
-  }
+      const file = prev.find(f => f.id === id);
+      if (file) URL.revokeObjectURL(file.url);
+      return prev.filter(f => f.id !== id);
+    });
+  };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
-      e.preventDefault()
-      handleSend()
+      e.preventDefault();
+      handleSend();
     }
-  }
-
-  const availableModels = models;
+  };
 
   return (
-    // 修改：添加 bg-transparent 强制背景透明
     <div className="bg-transparent p-4 relative z-10">
       <div className="bg-[#3A3A3A] rounded-[16px] p-3 flex flex-col gap-3">
         
-        {selectedContent && (
-          <div className="bg-[#3A3A3A] p-2 rounded-lg relative text-sm">
+        {/* 【改动】将选中的文本显示为可编辑的文本域 */}
+        {selectedContent !== null && (
+          <div className="bg-[#2F2F2F] p-2 rounded-lg relative text-sm border border-dashed border-gray-600">
             <div className="flex justify-between items-start gap-2">
               <div className="flex-grow">
-                <p className="text-xs text-gray-400 mb-1 font-semibold">Selected Text</p>
-                <p className="text-white whitespace-pre-wrap break-words max-h-24 overflow-y-auto">{selectedContent}</p>
+                <p className="text-xs text-gray-400 mb-1 font-semibold">Selected Text (Editable)</p>
+                <textarea
+                  value={selectedContent}
+                  onChange={(e) => setSelectedContent(e.target.value)}
+                  className="w-full bg-[#3A3A3A] text-white p-2 rounded text-sm resize-y outline-none min-h-[60px] max-h-32 scrollbar-thin scrollbar-thumb-gray-500 scrollbar-track-transparent"
+                  placeholder="Edit selected text..."
+                  rows={3}
+                />
               </div>
               <button
                 onClick={() => setSelectedContent(null)}
                 className="text-gray-400 hover:text-white flex-shrink-0"
-                title="清除选择"
+                title="Deselect Text"
               >
                 <X size={16} />
               </button>
@@ -292,20 +284,17 @@ export const InputArea: React.FC = () => {
         )}
 
         {filePreviews.length > 0 && (
-          <div className="overflow-x-auto">
-            <div className="flex gap-2 min-w-max">
+          <div className="overflow-x-auto scrollbar-thin scrollbar-thumb-gray-500 scrollbar-track-transparent">
+            <div className="flex gap-2 min-w-max pb-1">
               {filePreviews.map(file => (
-                <div key={file.id} className="flex items-center gap-1.5 bg-[#3A3A3A] rounded-md px-2 py-1">
+                <div key={file.id} className="flex items-center gap-1.5 bg-[#4C4C4C] rounded-md px-2 py-1">
                   {file.type.startsWith('image/') ? (
                     <Image size={14} className="text-white" />
                   ) : (
                     <FileText size={14} className="text-white" />
                   )}
-                  <span className="text-white text-xs max-w-xs truncate">{file.name}</span>
-                  <button
-                    onClick={() => removeFile(file.id)}
-                    className="text-gray-400 hover:text-red-400"
-                  >
+                  <span className="text-white text-xs max-w-[120px] truncate">{file.name}</span>
+                  <button onClick={() => removeFile(file.id)} className="text-gray-400 hover:text-red-400">
                     <X size={14} />
                   </button>
                 </div>
@@ -324,28 +313,23 @@ export const InputArea: React.FC = () => {
             className="w-full bg-transparent text-white text-base leading-6 resize-none outline-none placeholder-gray-500 min-h-[24px] max-h-[144px]"
             rows={1}
           />
-          {/* Bottom buttons */}
           <div className="flex justify-between items-center h-10">
-            {/* Left buttons: Model selection and file upload */}
             <div className="flex items-center gap-2">
               <div className="relative">
                 <button 
                   onClick={() => setShowModelDropdown(!showModelDropdown)}
-                  disabled={availableModels.length === 0}
+                  disabled={models.length === 0}
                   className="flex items-center gap-1 text-sm bg-[#5E5E5E] px-2 py-1 rounded-md hover:bg-opacity-80 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <span>{currentModel || '无可用模型'}</span>
+                  <span>{activeModel || '无可用模型'}</span>
                   <ChevronDown size={14} className={`transition-transform ${showModelDropdown ? 'rotate-180' : ''}`} />
                 </button>
-                {showModelDropdown && availableModels.length > 0 && (
-                  <div className="absolute bottom-full mb-2 w-48 bg-[#2a2a2a] border border-gray-600 rounded-md shadow-lg">
-                    {availableModels.map(model => (
+                {showModelDropdown && models.length > 0 && (
+                  <div className="absolute bottom-full mb-2 w-48 bg-[#2a2a2a] border border-gray-600 rounded-md shadow-lg z-20">
+                    {models.map(model => (
                       <div
                         key={model}
-                        onClick={() => {
-                          setCurrentModel(model);
-                          setShowModelDropdown(false);
-                        }}
+                        onClick={() => { setActiveModel(model); setShowModelDropdown(false); }}
                         className="px-3 py-2 text-sm text-white hover:bg-gray-700 cursor-pointer"
                       >
                         {model}
@@ -354,17 +338,21 @@ export const InputArea: React.FC = () => {
                   </div>
                 )}
               </div>
+              <button
+                onClick={() => setIsWebSearchEnabled(!isWebSearchEnabled)}
+                title={isWebSearchEnabled ? "禁用联网" : "启用联网"}
+                className={`p-2 rounded-full hover:bg-[#5E5E5E] transition-colors ${isWebSearchEnabled ? 'text-[#13E425]' : 'text-gray-400'}`}
+              >
+                <Globe size={18} />
+              </button>
             </div>
-
-            {/* Right button: Send */}
             <div className="flex items-center gap-2">
-              <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-full hover:bg-[#5E5E5E] transition-colors">
+              <button onClick={() => fileInputRef.current?.click()} className="p-2 rounded-full hover:bg-[#5E5E5E] text-gray-400 hover:text-white transition-colors">
                 <Paperclip size={18} />
               </button>
-
               <button
-                onClick={handleSend}
                 disabled={isTyping || (!inputText.trim() && filePreviews.length === 0 && !selectedContent)}
+                onClick={handleSend}
                 className="bg-[#4C4C4C] text-[#13E425] w-9 h-9 flex items-center justify-center rounded-full shadow-[0_4px_4px_rgba(0,0,0,0.25)] hover:bg-[#5C5C5C] disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
                 title="发送消息"
               >
@@ -374,14 +362,7 @@ export const InputArea: React.FC = () => {
           </div>
         </div>
       </div>
-
-      <input
-        ref={fileInputRef}
-        type="file"
-        multiple
-        onChange={handleFileUpload}
-        className="hidden"
-      />
+      <input ref={fileInputRef} type="file" multiple onChange={handleFileUpload} className="hidden" accept="image/*, .pdf, .doc, .docx, .txt, .md" />
     </div>
-  )
-}
+  );
+};
