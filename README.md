@@ -1,203 +1,151 @@
-# AI对话卡片树
+# Explore
 
-一个创新的大模型交互界面，通过3D卡片树结构实现高效知识管理。
+A dynamic, card-based knowledge exploration tool that reimagines note-taking as an interactive, hierarchical conversation with AI.
 
-## ✨ 功能特性
+![placeholder](https://via.placeholder.com/800x400.png?text=Explore+Project+UI+Screenshot)
+*(A screenshot or GIF of the application in action would be ideal here.)*
 
-- **立体卡片对话系统**：3D堆叠的卡片式对话管理
-- **知识树状导航**：实时可视化知识结构的3D树状导航
-- **多源内容聚合**：跨卡片整合文本/图像/文件内容
-- **智能文本选择**：选中文本快速创建新卡片
-- **流式AI响应**：实时显示AI回复内容
-- **响应式设计**：PC优先的交互界面
+## About The Project
 
-## 🚀 快速开始
+Explore Project is a visual and interactive platform designed for dynamic knowledge exploration. It moves beyond traditional linear notes by representing ideas and conversations as a navigable, three-dimensional stack of cards. Each card is a self-contained chat session, which can branch off from any point in a previous conversation, creating a rich, hierarchical tree of thought.
 
-### 环境要求
+This application is built for researchers, writers, developers, and anyone who thrives on non-linear thinking and wants to leverage AI to expand upon their ideas in a structured yet flexible way.
 
-- Node.js 16+
-- npm 或 yarn
+## Key Features
 
-### 安装依赖
+-   **Visual Card Stack Interface**: The current line of thought is represented as a stack of cards, providing a clear visual path of your exploration journey.
+-   **Hierarchical Note-Taking**: Create new cards from existing ones, building a tree of interconnected ideas. A new card can be spawned from any selected text, allowing you to dive deeper into specific concepts.
+-   **AI-Powered Conversations**: Each card is an interactive chat with a configurable AI model.
+-   **Automatic Title Generation**: The AI automatically summarizes the content of a card to generate a concise title, keeping your workspace organized.
+-   **2D Tree Navigation**: Get a bird's-eye view of your entire knowledge tree and quickly jump to any card in your project.
+-   **Project-Based Organization**: Group your explorations into distinct projects, each with its own independent card tree.
+-   **Drag-and-Drop Project Management**: Easily reorder your projects to fit your workflow.
+-   **Multimedia & Context Support**: Attach files (images, documents) and use selected text from a parent card as context for new queries.
+-   **Configurable Backend**: Easily configure the API endpoint, key, and available LLM models to connect with your preferred AI service.
+-   **Web Search Integration**: Empower the AI with real-time web search capabilities for up-to-date information.
 
-```bash
-cd ai-card-tree
-npm install
+## Tech Stack
+
+-   **Frontend**: [React](https://reactjs.org/) & [TypeScript](https://www.typescriptlang.org/)
+-   **State Management**: [Zustand](https://github.com/pmndrs/zustand)
+-   **Styling**: [Tailwind CSS](https://tailwindcss.com/)
+-   **Drag & Drop**: [dnd-kit](https://dndkit.com/)
+-   **Icons**: [Lucide React](https://lucide.dev/)
+
+## Core Concepts
+
+### 1. The Card Stack (Center View)
+
+The heart of the application. It displays the `currentCard` in full view, ready for interaction. Its parent cards are stacked behind it, receding into the background along a gentle curve. This provides immediate context for your current position in the knowledge tree.
+
+-   **Interaction**: You can click on any visible parent card to make it the `currentCard`.
+-   **Creation**: Create a blank child card or select text within the current card to create a new card with that text as its initial context.
+
+### 2. The Tree Navigation (Right Panel)
+
+This panel provides a complete 2D map of your project's card structure.
+
+-   **Representation**: Each card is a circle, and lines connect parents to children.
+-   **Navigation**: The view automatically centers on the `currentCard`. You can scroll through the entire tree and click any node to instantly switch to that card.
+-   **Clarity**: The `currentCard` is highlighted, and hovering over any node reveals its title.
+
+### 3. Conversational Exploration (Input Area)
+
+The input area is where you interact with the AI on the `currentCard`.
+
+-   **Rich Input**: Beyond simple text, you can attach files and images.
+-   **Context-Aware**: When you create a card from selected text, that text is automatically included as context for your first message.
+-   **Model Selection**: Choose the AI model you want to use for the conversation on the fly.
+
+## Getting Started
+
+To get a local copy up and running, follow these simple steps.
+
+### Prerequisites
+
+-   Node.js (v16 or later)
+-   npm, yarn, or pnpm
+
+### Installation
+
+1.  **Clone the repo**
+    ```sh
+    git clone https://github.com/your-username/explore-project.git
+    cd explore-project
+    ```
+
+2.  **Install NPM packages**
+    ```sh
+    npm install
+    # or
+    yarn install
+    ```
+
+3.  **Set up environment variables**
+    The application connects to a backend AI service. You must configure the API endpoint and your key. Create a `.env.local` file in the root of the project and add your configuration.
+
+    The application looks for an OpenAI-compatible API endpoint.
+
+    `.env.local.example`
+    ```
+    # No environment variables are strictly required by the code provided,
+    # as settings are managed in the UI. However, if you wanted to set
+    # default values, you could do so here and load them in the store.
+    ```
+
+4.  **Run the development server**
+    ```sh
+    npm run dev
+    # or
+    yarn dev
+    ```
+    Open [http://localhost:5173](http://localhost:5173) (or your configured port) to view it in the browser.
+
+## Configuration
+
+For the AI features to work, you must configure your API settings within the application itself:
+
+1.  Click the **Settings** (gear) icon in the bottom-left corner.
+2.  In the modal that appears:
+    -   **API URL**: Enter the full URL of your LLM provider's chat completions endpoint (e.g., `https://api.openai.com/v1/chat/completions`).
+    -   **API Key**: Enter your secret API key.
+    -   **Model Names**: Add the specific model names you want to use (e.g., `gpt-4-turbo`, `claude-3-opus-20240229`). You can add multiple models to choose from in the input area.
+3.  Click the **Save** (check) button. The settings are persisted locally in your browser.
+
+## Project Structure
+
+The codebase is organized with a focus on feature components and centralized state management.
+
+```
+/src
+|-- /components
+|   |-- CardStack.tsx       # Renders the main card stack view (Current & Parent cards)
+|   |-- InputArea.tsx       # The user input field with file handling and model selection
+|   |-- ProjectPanel.tsx    # The left panel for managing projects
+|   |-- SettingsModal.tsx   # Modal for configuring API and models
+|   |-- TreeNavigation.tsx  # The right panel for 2D tree visualization
+|
+|-- /stores
+|   |-- cardStore.ts        # Zustand store for managing all card data and interactions
+|   |-- projectStore.ts     # Zustand store for managing projects and the active project
+|   |-- settingsStore.ts    # Zustand store for API settings and modals
+|
+|-- App.tsx                 # Main application component, lays out the three panels
+|-- main.tsx                # Application entry point
 ```
 
-### 配置API密钥
+## Contributing
 
-1. 复制环境变量示例文件：
-```bash
-cp env.example .env.local
-```
+Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
 
-2. 编辑 `.env.local` 文件，配置您的API密钥：
-```env
-VITE_SILICONFLOW_API_URL=https://api.siliconflow.cn/v1/chat/completions
-VITE_DEFAULT_API_KEY=your_api_key_here
-```
+If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
 
-### 启动开发服务器
+1.  Fork the Project
+2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4.  Push to the Branch (`git push origin feature/AmazingFeature`)
+5.  Open a Pull Request
 
-```bash
-npm run dev
-```
+## License
 
-访问 http://localhost:3000 开始使用
-
-## 🎯 使用指南
-
-### 基本操作
-
-1. **创建卡片**：在输入框输入内容并发送，系统会自动创建新卡片
-2. **选择文本**：在对话中选中文本，点击"新建卡片"按钮创建子卡片
-3. **切换卡片**：点击卡片或使用右侧树状导航切换当前卡片
-4. **删除卡片**：点击卡片标题栏的删除按钮（会同时删除所有子卡片）
-
-### 高级功能
-
-- **3D树状导航**：点击右侧导航的"3D"按钮切换到3D视图
-- **文件上传**：支持图片、PDF、文档等文件类型
-- **多选内容**：按住Ctrl键可以多选文本内容
-- **项目管理**：左侧面板支持创建多个项目
-
-## 🛠️ 技术栈
-
-- **前端框架**：React 18 + TypeScript
-- **3D渲染**：Three.js + React Three Fiber
-- **状态管理**：Zustand
-- **样式系统**：TailwindCSS + Framer Motion
-- **构建工具**：Vite
-- **LLM集成**：硅基流动API
-
-## 📁 项目结构
-
-本小节详细描述了项目源代码的布局和每个关键文件的用途。
-
-```
-ai-card-tree/
-├── src/
-│   ├── assets/              # 静态资源 (如图标、图片)
-│   ├── components/          # React UI 组件
-│   │   ├── CardStack.tsx    # 中央卡片堆叠区
-│   │   ├── InputArea.tsx    # 底部输入区域
-│   │   ├── ProjectPanel.tsx # 左侧项目管理面板
-│   │   └── TreeNavigation.tsx # 右侧卡片树导航
-│   ├── hooks/               # 自定义 React Hooks
-│   │   └── useInputAreaHeight.ts # 管理输入框动态高度
-│   ├── stores/              # 全局状态管理 (Zustand)
-│   │   └── cardStore.ts     # 核心状态逻辑，管理卡片数据
-│   ├── App.tsx              # 应用根组件
-│   ├── main.tsx             # 应用入口文件
-│   └── index.css            # 全局样式
-├── public/                  # 公共静态资源
-├── .env.local               # 本地环境变量 (需自行创建)
-├── package.json             # 项目依赖和脚本
-└── vite.config.ts           # Vite 配置文件
-```
-
-## 📄 文件依赖关系
-
-该项目遵循一个清晰的单向数据流架构，由 `zustand` 状态管理驱动。
-
-```mermaid
-graph TD
-    subgraph "入口 (Entry Point)"
-        A[main.tsx]
-    end
-
-    subgraph "根组件 (Root Component)"
-        B(App.tsx)
-    end
-
-    subgraph "功能组件 (UI Components)"
-        D[components/ProjectPanel.tsx]
-        E[components/CardStack.tsx]
-        F[components/TreeNavigation.tsx]
-        G[components/InputArea.tsx]
-    end
-    
-    subgraph "状态管理 (Global State)"
-        I[stores/cardStore.ts]
-    end
-    
-    subgraph "自定义Hooks (Custom Hooks)"
-        H[hooks/useInputAreaHeight.ts]
-    end
-
-    A -- "渲染" --> B
-    B -- "组合UI" --> D
-    B -- "组合UI" --> E
-    B -- "组合UI" --> F
-    B -- "组合UI" --> G
-    
-    G -- "使用" --> H
-    B -- "使用" --> H
-
-    E -- "读/写状态" --> I
-    F -- "读/写状态" --> I
-    G -- "读/写状态" --> I
-```
-
-### 核心流程说明
-
-1.  **应用启动**: `main.tsx` 是应用的入口，它负责将根组件 `App.tsx` 渲染到页面上。
-2.  **UI布局**: `App.tsx` 构建了应用的三栏式主界面，并将 `ProjectPanel`、`CardStack`、`TreeNavigation` 和 `InputArea` 等组件放置在正确的位置。
-3.  **状态管理**:
-    *   `stores/cardStore.ts` 是整个应用的数据中枢，使用 `zustand` 来管理所有卡片的状态、内容和关系。
-    *   它负责处理核心业务逻辑，如添加/删除卡片、切换当前卡片、与AI服务交互等。
-    *   数据会被持久化到浏览器本地存储，防止刷新后丢失。
-4.  **组件交互**:
-    *   几乎所有的交互组件（`CardStack`, `TreeNavigation`, `InputArea`）都直接与 `cardStore.ts` 通信。
-    *   例如，当用户在 `InputArea` 中输入并发送消息时，`InputArea` 会调用 `cardStore.ts` 中定义的 `action` 来创建新卡片或添加消息。
-    *   `cardStore.ts` 的状态更新后，所有订阅了该状态的组件（如 `CardStack` 和 `TreeNavigation`）都会自动重新渲染，从而在界面上反映出最新的数据。
-5.  **自定义Hooks**: `hooks/useInputAreaHeight.ts` 封装了可复用的逻辑，用于动态计算输入框的高度，解耦了 `App.tsx` 和 `InputArea` 之间的高度协调逻辑。
-
-## 🔧 开发指南
-
-### 添加新功能
-
-1. 在 `src/components/` 中创建新组件
-2. 在 `src/stores/cardStore.ts` 中添加相关状态管理
-3. 在 `src/App.tsx` 中集成新组件
-
-### 自定义样式
-
-- 主题色彩在 `tailwind.config.js` 中配置
-- 组件样式使用 TailwindCSS 类名
-- 3D效果通过 Three.js 材质和光照实现
-
-### API集成
-
-当前使用硅基流动API，支持以下模型：
-- DeepSeek-R1-0528-Qwen3-8B
-- 其他兼容OpenAI格式的模型
-
-## 🐛 常见问题
-
-### Q: API密钥在哪里配置？
-A: 在项目根目录创建 `.env.local` 文件，添加 `VITE_DEFAULT_API_KEY=your_key`
-
-### Q: 如何切换3D/2D视图？
-A: 在右侧树状导航面板点击"3D"按钮切换
-
-### Q: 支持哪些文件格式？
-A: 支持图片、PDF、Word、文本等常见格式
-
-### Q: 数据存储在哪里？
-A: 数据存储在浏览器本地存储中，刷新页面不会丢失
-
-## 📄 许可证
-
-MIT License
-
-## 🤝 贡献
-
-欢迎提交 Issue 和 Pull Request！
-
-## 📞 支持
-
-如有问题，请通过以下方式联系：
-- 提交 GitHub Issue
-- 发送邮件至项目维护者 
+Distributed under the MIT License. See `LICENSE` for more information.
