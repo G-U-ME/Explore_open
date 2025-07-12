@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Settings, X } from 'lucide-react';
+import { Plus, Settings, X, Sidebar } from 'lucide-react'; // <<< CHANGE: Import Sidebar
 import { useSettingsStore } from '../stores/settingsStore';
 import {
   DndContext,
@@ -19,7 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useProjectStore, Project } from '../stores/projectStore';
-
+import { useUIStore } from '../stores/uiStore'; // <<< CHANGE: Import UI store
 
 const SortableProjectItem: React.FC<{
   project: Project;
@@ -112,6 +112,7 @@ export const ProjectPanel: React.FC = () => {
   } = useProjectStore();
 
   const { openSettingsModal } = useSettingsStore();
+  const { isLeftPanelCollapsed, toggleLeftPanel } = useUIStore(); // <<< CHANGE: Get state and action from store
   const [showNewProject, setShowNewProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
@@ -165,109 +166,138 @@ export const ProjectPanel: React.FC = () => {
       const oldIndex = projects.findIndex(item => item.id === active.id);
       const newIndex = projects.findIndex(item => item.id === over.id);
       const reorderedProjects = arrayMove(projects, oldIndex, newIndex);
-      // This feels a bit hacky, but it's the simplest way to update the whole array
-      // in the store without adding a specific action for it.
       useProjectStore.setState({ projects: reorderedProjects });
     }
   };
 
+  // <<< CHANGE: New handlers for panel toggle
+  const handlePanelClick = () => {
+    if (isLeftPanelCollapsed) {
+      toggleLeftPanel();
+    }
+  };
+
+  const handleToggleClick = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    toggleLeftPanel();
+  };
+
+
   return (
-    // 修改：添加 bg-transparent 强制背景透明
-    <div className="h-full flex flex-col bg-transparent text-white relative z-10">
+    // <<< CHANGE: Add click handler, conditional cursor, and overflow-hidden
+    <div 
+      className={`h-full flex flex-col bg-transparent text-white relative z-10 overflow-hidden ${isLeftPanelCollapsed ? 'cursor-pointer' : ''}`}
+      onClick={handlePanelClick}
+    >
       {/* 上部分 - 项目管理区域 */}
-      <div className="flex-1 flex flex-col py-6 px-4">
-        {/* 新建项目按钮 (左对齐, 顶对齐) */}
-        <button
-          onClick={() => setShowNewProject(true)}
-          className="p-2.5 mb-6 bg-[#333333] hover:bg-[#444444] rounded-lg transition-colors self-start"
-        >
-          <Plus size={24} />
-        </button>
-
-        {/* 项目列表容器 (保持居中) */}
-        <div className="w-full max-w-xs space-y-2 self-center">
-          {/* 新建项目输入区域 */}
-          {showNewProject && (
-            <div className="p-3 bg-[#4C4C4C] rounded-xl mb-4">
-              <input
-                type="text"
-                value={newProjectName}
-                onChange={e => setNewProjectName(e.target.value)}
-                placeholder="Project Name"
-                className="w-full p-2 bg-[#333] rounded border border-[#555] text-white text-sm"
-                onKeyPress={e => e.key === 'Enter' && handleCreateProject()}
-                autoFocus
-              />
-              <div className="flex space-x-2 mt-2">
-                <button
-                  onClick={handleCreateProject}
-                  className="px-3 py-1 bg-white text-black rounded text-sm font-medium"
-                >
-                  Create
-                </button>
-                <button
-                  onClick={() => setShowNewProject(false)}
-                  className="px-3 py-1 bg-[#666] text-white rounded text-sm"
-                >
-                  Cancel
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* 项目列表 */}
-          <DndContext
-            sensors={sensors}
-            collisionDetection={closestCenter}
-            onDragEnd={handleDragEnd}
+      {/* <<< CHANGE: Adjust padding for collapsed state */}
+      <div className={`flex-1 flex flex-col py-6 transition-all duration-300 ${isLeftPanelCollapsed ? 'px-3' : 'px-4'}`}>
+        {/* <<< CHANGE: New button container */}
+        <div className={`flex items-center self-start ${isLeftPanelCollapsed ? 'mb-0' : 'mb-6'} ${!isLeftPanelCollapsed ? 'space-x-2' : ''}`}>
+          <button
+            onClick={handleToggleClick}
+            className="p-2.5 bg-[#333333] hover:bg-[#444444] rounded-lg transition-colors flex-shrink-0"
           >
-            <SortableContext
-              items={projects.map(p => p.id)}
-              strategy={verticalListSortingStrategy}
+            <Sidebar size={24} />
+          </button>
+          {!isLeftPanelCollapsed && (
+            <button
+              onClick={() => setShowNewProject(true)}
+              className="p-2.5 bg-[#333333] hover:bg-[#444444] rounded-lg transition-colors"
             >
-              <div className="space-y-2">
-                {projects.map(project => (
-                  <SortableProjectItem
-                    key={project.id}
-                    project={project}
-                    isActive={project.id === activeProjectId}
-                    onSwitch={handleSwitchProject}
-                    onDelete={handleDeleteProject}
-                    onStartRename={handleStartRename}
-                    renamingProjectId={renamingProjectId}
-                    renameValue={renameValue}
-                    setRenameValue={setRenameValue}
-                    handleRenameProject={handleRenameProject}
-                  />
-                ))}
-              </div>
-            </SortableContext>
-          </DndContext>
-          
-          {projects.length === 0 && !showNewProject && (
-            <div className="text-center text-gray-400 mt-8">
-              <p>No projects yet.</p>
-              <p>Click the '+' button to create one.</p>
-            </div>
+              <Plus size={24} />
+            </button>
           )}
         </div>
+
+        {/* <<< CHANGE: Conditionally render the rest of the content */}
+        {!isLeftPanelCollapsed && (
+          <div className="w-full max-w-xs space-y-2 self-center">
+            {/* 新建项目输入区域 */}
+            {showNewProject && (
+              <div className="p-3 bg-[#4C4C4C] rounded-xl mb-4">
+                <input
+                  type="text"
+                  value={newProjectName}
+                  onChange={e => setNewProjectName(e.target.value)}
+                  placeholder="Project Name"
+                  className="w-full p-2 bg-[#333] rounded border border-[#555] text-white text-sm"
+                  onKeyPress={e => e.key === 'Enter' && handleCreateProject()}
+                  autoFocus
+                />
+                <div className="flex space-x-2 mt-2">
+                  <button
+                    onClick={handleCreateProject}
+                    className="px-3 py-1 bg-white text-black rounded text-sm font-medium"
+                  >
+                    Create
+                  </button>
+                  <button
+                    onClick={() => setShowNewProject(false)}
+                    className="px-3 py-1 bg-[#666] text-white rounded text-sm"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* 项目列表 */}
+            <DndContext
+              sensors={sensors}
+              collisionDetection={closestCenter}
+              onDragEnd={handleDragEnd}
+            >
+              <SortableContext
+                items={projects.map(p => p.id)}
+                strategy={verticalListSortingStrategy}
+              >
+                <div className="space-y-2">
+                  {projects.map(project => (
+                    <SortableProjectItem
+                      key={project.id}
+                      project={project}
+                      isActive={project.id === activeProjectId}
+                      onSwitch={handleSwitchProject}
+                      onDelete={handleDeleteProject}
+                      onStartRename={handleStartRename}
+                      renamingProjectId={renamingProjectId}
+                      renameValue={renameValue}
+                      setRenameValue={setRenameValue}
+                      handleRenameProject={handleRenameProject}
+                    />
+                  ))}
+                </div>
+              </SortableContext>
+            </DndContext>
+            
+            {projects.length === 0 && !showNewProject && (
+              <div className="text-center text-gray-400 mt-8">
+                <p>No projects yet.</p>
+                <p>Click the '+' button to create one.</p>
+              </div>
+            )}
+          </div>
+        )}
       </div>
 
-      {/* 下部分 - 设置区域 (边框已移除) */}
-      <div className="p-4 relative z-10">
-        <div className="flex items-center justify-between">
-          {/* 用户设置按钮 */}
-          <button className="flex items-center gap-3 p-2 rounded-lg hover:bg-[#333] transition-colors">
-            <div className="w-7 h-7 rounded-full border-2 border-white" />
-            <span className="text-base font-normal text-white">Account</span>
-          </button>
+      {/* <<< CHANGE: Conditionally render settings area */}
+      {!isLeftPanelCollapsed && (
+        <div className="p-4 relative z-10">
+          <div className="flex items-center justify-between">
+            {/* 用户设置按钮 */}
+            <button className="flex items-center gap-3 p-2 rounded-lg hover:bg-[#333] transition-colors">
+              <div className="w-7 h-7 rounded-full border-2 border-white" />
+              <span className="text-base font-normal text-white">Account</span>
+            </button>
 
-          {/* APP设置按钮 */}
-          <button className="p-2 rounded-lg hover:bg-[#333] transition-colors" onClick={openSettingsModal}>
-            <Settings size={24} className="text-white" />
-          </button>
+            {/* APP设置按钮 */}
+            <button className="p-2 rounded-lg hover:bg-[#333] transition-colors" onClick={openSettingsModal}>
+              <Settings size={24} className="text-white" />
+            </button>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

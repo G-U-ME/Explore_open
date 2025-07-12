@@ -7,6 +7,7 @@ import { InputArea } from './components/InputArea'
 import SettingsModal from './components/SettingsModal'
 import { useProjectStore } from './stores/projectStore'
 import { CardData } from './stores/cardStore'
+import { useUIStore } from './stores/uiStore' // <<< CHANGE: Import UI store
 
 const useInputAreaHeight = () => {
   const inputAreaRef = useRef<HTMLDivElement>(null);
@@ -25,8 +26,6 @@ const useInputAreaHeight = () => {
   return { inputAreaHeight, inputAreaRef };
 };
 
-// <<< CHANGE 1: REMOVED the constant from here
-// const LEFT_PANEL_WIDTH = 280; 
 const RIGHT_PANEL_WIDTH = 300;
 
 // ... (ErrorBoundary code is correct and remains unchanged) ...
@@ -80,9 +79,13 @@ function App() {
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
   
   const { projects, activeProjectId, setActiveProject, createProject, updateProject } = useProjectStore();
+  const { isLeftPanelCollapsed } = useUIStore(); // <<< CHANGE: Get state from UI store
 
-  // <<< CHANGE 2: Define leftPanelWidth dynamically inside the component
-  const leftPanelWidth = windowWidth < 1080 ? 200 : 300;
+  // <<< CHANGE: Define leftPanelWidth dynamically based on collapsed state
+  const COLLAPSED_WIDTH = 56; // Width for collapsed panel (padding + button size)
+  const expandedWidth = windowWidth < 1080 ? 200 : 300;
+  const leftPanelWidth = isLeftPanelCollapsed ? COLLAPSED_WIDTH : expandedWidth;
+
 
   useEffect(() => {
     // One-time data migration from old format
@@ -125,7 +128,6 @@ function App() {
   const screenHeight = window.innerHeight;
   const availableHeight = screenHeight - inputAreaHeight;
   const cardCenterY = availableHeight / 2;
-  // <<< CHANGE 3: Use the new dynamic variable here
   const centerAreaWidth = windowWidth - leftPanelWidth - RIGHT_PANEL_WIDTH;
   const activeProject = projects.find(p => p.id === activeProjectId);
 
@@ -134,9 +136,8 @@ function App() {
       <SettingsModal />
       <div className="h-screen w-screen bg-[#101010] text-white font-inter relative overflow-hidden">
         <div
-          className="absolute top-0 bottom-0 z-0"
+          className="absolute top-0 bottom-0 z-0 transition-all duration-300 ease-in-out" // <<< CHANGE: Added transition
           style={{
-            // <<< CHANGE 4: Use the new dynamic variable here
             left: `${leftPanelWidth}px`,
             right: `${RIGHT_PANEL_WIDTH}px`,
           }}
@@ -158,11 +159,10 @@ function App() {
           )}
         </div>
 
-        {/* Left Panel Container: REMOVED border-r */}
+        {/* Left Panel Container */}
         <div
-          className="absolute top-0 left-0 h-full z-10 pointer-events-none"
+          className="absolute top-0 left-0 h-full z-10 pointer-events-none transition-all duration-300 ease-in-out" // <<< CHANGE: Added transition
           style={{ 
-            // <<< CHANGE 5: Use the new dynamic variable here
             width: `${leftPanelWidth}px` 
           }}
         >
@@ -171,7 +171,7 @@ function App() {
           </div>
         </div>
 
-        {/* Right Panel Container: REMOVED border-l */}
+        {/* Right Panel Container */}
         <div
           className="absolute top-0 right-0 h-full z-10 pointer-events-none"
           style={{ width: `${RIGHT_PANEL_WIDTH}px` }}
@@ -183,9 +183,8 @@ function App() {
 
         <div
           ref={inputAreaRef}
-          className="absolute bottom-0 z-10"
+          className="absolute bottom-0 z-10 transition-all duration-300 ease-in-out" // <<< CHANGE: Added transition
           style={{
-            // <<< CHANGE 6: Use the new dynamic variable here
             left: `${leftPanelWidth}px`,
             right: `${RIGHT_PANEL_WIDTH}px`,
           }}
