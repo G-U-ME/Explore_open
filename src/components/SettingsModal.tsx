@@ -264,7 +264,7 @@ const SettingsModal: React.FC = () => {
               title="恢复并关闭"
               className="flex items-center justify-center w-[48px] h-[48px] bg-[#4C4C4C] rounded-full shadow-[0px_4px_4px_rgba(0,0,0,0.25)] hover:bg-[#5e5e5e] transition-colors"
             >
-              <RotateCcw size={28} className="text-lime-500" />
+              <RotateCcw size={28} className="text-[#13E425]" />
             </button>
             <button
               onClick={handleSave}
@@ -272,7 +272,7 @@ const SettingsModal: React.FC = () => {
               title="保存"
               className="flex items-center justify-center w-[48px] h-[48px] bg-[#4C4C4C] rounded-full shadow-[0px_4px_4px_rgba(0,0,0,0.25)] hover:bg-[#5e5e5e] transition-colors"
             >
-              <Check size={28} className="text-lime-500" />
+              <Check size={28} className="text-[#13E425]" />
             </button>
           </div>
         </div>
