@@ -13,6 +13,23 @@ import { visit } from 'unist-util-visit';
 import { Node, Parent, Literal } from 'unist';
 import rehypeSanitize, {defaultSchema} from 'rehype-sanitize';
 
+// --- MODIFICATION START ---
+// The normalizeMathDelimiters function is moved here from InputArea.tsx
+// to be accessible by the preview card's fetch logic.
+/**
+ * Normalizes various math delimiters to the standard ones 
+ * that remark-math understands ($...$ and $$...$$).
+ * @param content The raw string from the AI.
+ * @returns A string with normalized math delimiters.
+ */
+function normalizeMathDelimiters(content: string): string {
+  // Replace LaTeX display math \[ ... \] with $$ ... $$
+  let normalized = content.replace(/\\\[(.*?)\\\]/gs, '$$$$$1$$$$');
+  // Replace LaTeX inline math \( ... \) with $ ... $
+  normalized = normalized.replace(/\\\((.*?)\\\)/gs, '$$$1$$');
+  return normalized;
+}
+// --- MODIFICATION END ---
 
 
 // [THE DEFINITIVE WORKING SOLUTION - STAGE 1: REMARK PLUGIN]
@@ -97,18 +114,19 @@ const PreviewCard: React.FC<{
           </button>
         </div>
       </div>
-      <div className="w-full flex-1 overflow-y-auto min-h-0 text-sm [&::-webkit-scrollbar]:w-[4px] [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#888] [&::-webkit-scrollbar-thumb]:rounded-full">
+      {/* --- MODIFICATION START: Added "markdown-content" class for list styling --- */}
+      <div className="markdown-content w-full flex-1 overflow-y-auto min-h-0 text-sm [&::-webkit-scrollbar]:w-[4px] [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#888] [&::-webkit-scrollbar-thumb]:rounded-full">
         {isLoading && <Loader className="animate-spin text-gray-400 mx-auto mt-4" />}
+        {/* --- MODIFICATION START: Updated markdown plugins for full-featured rendering --- */}
         <ReactMarkdown 
             remarkPlugins={[remarkGfm, remarkMath]}
-            // --- 修改开始 (问题 2) ---
-            // Revert back to default KaTeX HTML rendering. Sanitization will be handled in MarkdownRenderer.
-            rehypePlugins={[rehypeKatex]}
-            // --- 修改结束 ---
+            rehypePlugins={[rehypeKatex, [rehypeSanitize, customSanitizeSchema]]}
         >
             {cleanContent}
         </ReactMarkdown>
+        {/* --- MODIFICATION END --- */}
       </div>
+      {/* --- MODIFICATION END --- */}
     </div>
   );
 };
@@ -549,6 +567,8 @@ export const CardStack: React.FC<CardStackProps> = ({ centerY, availableHeight, 
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      // --- MODIFICATION START: Added accumulator for normalization ---
+      let aiContent = ''; // Local accumulator for raw AI content
 
       mainReadLoop: while (true) {
         const { value, done } = await reader.read();
@@ -569,13 +589,16 @@ export const CardStack: React.FC<CardStackProps> = ({ centerY, availableHeight, 
             const json = JSON.parse(data);
             const delta = json.choices?.[0]?.delta?.content;
             if (delta) {
-              setPreviewState((prev) => ({ ...prev, content: prev.content + delta, isLoading: false }));
+              aiContent += delta; // Accumulate the raw delta
+              const normalizedContent = normalizeMathDelimiters(aiContent); // Normalize the whole accumulated string
+              setPreviewState((prev) => ({ ...prev, content: normalizedContent, isLoading: false }));
             }
           } catch (e) {
             console.warn('Stream parsing error:', e);
           }
         }
       }
+      // --- MODIFICATION END ---
     } catch (error) {
       console.error("Preview fetch error:", error);
       setPreviewState((prev) => ({ ...prev, content: "Failed to fetch explanation.", isLoading: false }));
@@ -635,7 +658,11 @@ export const CardStack: React.FC<CardStackProps> = ({ centerY, availableHeight, 
             const delta = json.choices?.[0]?.delta?.content;
             if (delta) {
               aiContent += delta;
-              updateMessage(cardId, aiMsgId, { content: aiContent });
+              // Here we should also use normalization, but CurrentCardDialog's MarkdownRenderer handles it.
+              // Let's check... no, it's fetchLLMStream in InputArea that does it.
+              // So, for consistency, let's normalize here too.
+              const normalizedContent = normalizeMathDelimiters(aiContent);
+              updateMessage(cardId, aiMsgId, { content: normalizedContent });
             }
           } catch (e) {
             console.warn('Stream parsing error:', e);

@@ -15,24 +15,8 @@ interface FilePreview {
   dataUrl?: string; 
 }
 
-/**
- * Normalizes various math delimiters to the standard ones 
- * that remark-math understands ($...$ and $$...$$).
- * @param content The raw string from the AI.
- * @returns A string with normalized math delimiters.
- */
-function normalizeMathDelimiters(content: string): string {
-  // Replace LaTeX display math \[ ... \] with $$ ... $$
-  // The '$$$$' is necessary because '$' is a special character in JS replace, so '$$' escapes to a single '$'.
-  let normalized = content.replace(/\\\[(.*?)\\\]/gs, '$$$$$1$$$$');
-  
-  // Replace LaTeX inline math \( ... \) with $ ... $
-  // [FIX] The original '$$1$' produced '$1$', which KaTeX renders as '1'.
-  // The correct form is '$$$1$$' which produces '$' + captured_group + '$'.
-  normalized = normalized.replace(/\\\((.*?)\\\)/gs, '$$$1$$');
-  
-  return normalized;
-}
+// NOTE: The 'normalizeMathDelimiters' function has been moved to CardStack.tsx
+// to be shared between the main input and the preview card generation.
 
 export const InputArea: React.FC = () => {
   const { 
@@ -60,6 +44,13 @@ export const InputArea: React.FC = () => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const currentCard = cards.find(card => card.id === currentCardId);
+
+  // This utility function is now defined in CardStack.tsx
+  const normalizeMathDelimiters = (content: string): string => {
+    let normalized = content.replace(/\\\[(.*?)\\\]/gs, '$$$$$1$$$$');
+    normalized = normalized.replace(/\\\((.*?)\\\)/gs, '$$$1$$');
+    return normalized;
+  };
 
   useEffect(() => {
     if (models.length > 0 && !models.includes(activeModel)) {
