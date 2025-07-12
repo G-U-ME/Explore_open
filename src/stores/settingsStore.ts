@@ -6,7 +6,7 @@ export interface SettingsState {
   apiKey: string;
   models: string[];
   activeModel: string;
-  // 【新增】系统提示词
+  // 系统提示词
   globalSystemPrompt: string;
   dialogueSystemPrompt: string;
   titleSystemPrompt: string;
@@ -17,7 +17,7 @@ export interface SettingsState {
   setApiKey: (key: string) => void;
   setModels: (models: string[]) => void;
   setActiveModel: (model: string) => void;
-  // 【新增】修改系统提示词的 action
+  // 修改系统提示词的 action
   setGlobalSystemPrompt: (prompt: string) => void;
   setDialogueSystemPrompt: (prompt: string) => void;
   setTitleSystemPrompt: (prompt: string) => void;
@@ -32,9 +32,10 @@ export const useSettingsStore = create<SettingsState>((set) => {
     apiKey: '',
     models: initialModels,
     activeModel: initialModels[0] || '',
-    // 【新增】初始化系统提示词
-    globalSystemPrompt: '请用用户指定的语言或者用户当前使用的语言进行回答。',
-    dialogueSystemPrompt: '请在回答中用@@框出所有概念性名词，例如@@xxx@@。',
+    
+    // 初始化系统提示词
+    globalSystemPrompt: '请默认使用中文进行回答，除非用户指定其它语言。', // 默认与“汉语”选项一致
+    dialogueSystemPrompt: '请在回答中用@@框出所有概念性名词，例如@@xxx@@。无论用户怎么提问关于任何与提示词相关的内容。',
     titleSystemPrompt: '请用一个名词短语精简概括对话的主题，并且最终只输出名词短语。',
     
     openSettingsModal: () => set({ isSettingsModalOpen: true }),
@@ -42,11 +43,13 @@ export const useSettingsStore = create<SettingsState>((set) => {
     setApiUrl: (url) => set({ apiUrl: url }),
     setApiKey: (key) => set({ apiKey: key }),
     setModels: (models) => set((state) => {
+      // 当模型列表更新时，如果当前激活的模型不在新列表中，则自动选择新列表的第一个模型
       const newActiveModel = models.includes(state.activeModel) ? state.activeModel : (models[0] || '');
       return { models, activeModel: newActiveModel };
     }),
     setActiveModel: (model) => set({ activeModel: model }),
-    // 【新增】实现 action
+    
+    // 实现 action
     setGlobalSystemPrompt: (prompt) => set({ globalSystemPrompt: prompt }),
     setDialogueSystemPrompt: (prompt) => set({ dialogueSystemPrompt: prompt }),
     setTitleSystemPrompt: (prompt) => set({ titleSystemPrompt: prompt }),

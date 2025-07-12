@@ -129,7 +129,11 @@ async function generateTitleFromMessages(messages: CardMessage[]): Promise<strin
   // 构建对话历史
   const conversationContent = messages
     .slice(-10) // 同样只取最近10条
-    .map(msg => `${msg.role === 'user' ? '用户' : 'AI'}: ${msg.content}`)
+    .map(msg => {
+      // 【关键修复】在拼接前，先移除AI回复中的@@标记
+      const cleanedContent = msg.content.replace(/@@(.*?)@@/g, '$1'); 
+      return `${msg.role === 'user' ? '用户' : 'AI'}: ${cleanedContent}`;
+    })
     .join('\n');
     
   // 【修改】组合系统提示词

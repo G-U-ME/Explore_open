@@ -536,7 +536,7 @@ export const CardStack: React.FC<CardStackProps> = ({ centerY, availableHeight, 
     }
     const timerId = setTimeout(() => {
       generateTitle(currentCardId);
-    }, 3000);
+    }, 1500);
     return () => clearTimeout(timerId);
   }, [currentCardId, currentCard?.messages, isTyping, generateTitle]);
 
