@@ -104,33 +104,36 @@ function deduplicateCards(cards: CardData[]): CardData[] {
 }
 
 /**
- * 根据消息记录调用AI API生成标题。
+ * 【修改】根据消息记录调用AI API生成标题。
+ * 此函数现在直接从 settingsStore 获取配置，并使用独立的系统提示词。
  * @param messages 卡片中的消息数组
- * @param apiKey 从Store中获取的API Key
- * @param apiUrl 从Store中获取的API URL
- * @param model 用于生成标题的模型名称 (现在是激活的模型)
  * @returns AI生成的标题或备用标题
  */
-async function generateTitleFromMessages(messages: CardMessage[], apiKey: string | null, apiUrl: string, model: string | undefined): Promise<string> {
+async function generateTitleFromMessages(messages: CardMessage[]): Promise<string> {
   if (messages.length === 0) return '新卡片';
 
   const fallback = () => {
     const fallbackContent = messages.slice(-1)[0]?.content || '新卡片';
     return fallbackContent.substring(0, 15);
-  }
+  };
 
-  // 构建prompt
-  const recentMessages = messages.slice(-10);
-  const conversationContent = recentMessages
-    .map(msg => `${msg.role === 'user' ? '用户' : 'AI'}: ${msg.content}`)
-    .join('\n');
-  const prompt = `请用一个名词短语精简概括以下对话的主题，并且最终只输出名词短语：\n\n${conversationContent}`;
+  // 【修改】从 settingsStore 获取所有需要的配置
+  const { apiKey, apiUrl, activeModel, globalSystemPrompt, titleSystemPrompt } = useSettingsStore.getState();
 
   // 检查所有必要的配置
-  if (!apiKey || !apiUrl || !model) {
+  if (!apiKey || !apiUrl || !activeModel) {
     console.warn('用于生成标题的 API Key, API URL 或模型未配置，将使用备用方案。');
     return fallback();
   }
+
+  // 构建对话历史
+  const conversationContent = messages
+    .slice(-10) // 同样只取最近10条
+    .map(msg => `${msg.role === 'user' ? '用户' : 'AI'}: ${msg.content}`)
+    .join('\n');
+    
+  // 【修改】组合系统提示词
+  const systemPrompt = [globalSystemPrompt, titleSystemPrompt].filter(Boolean).join('\n\n');
 
   try {
     const response = await fetch(apiUrl, {
@@ -140,15 +143,18 @@ async function generateTitleFromMessages(messages: CardMessage[], apiKey: string
         'Authorization': `Bearer ${apiKey}`
       },
       body: JSON.stringify({
-        model: model, // 使用传入的激活模型
+        model: activeModel,
         stream: false,
-        messages: [{ role: 'user', content: prompt }]
+        // 【修改】使用 system 和 user 角色来发送请求，而不是拼接字符串
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: conversationContent }
+        ]
       }),
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      // 在此记录详细错误，以便调试
       console.error(`API请求失败: ${response.status} - ${errorText}`);
       throw new Error(`API请求失败: ${response.status}`);
     }
@@ -163,7 +169,6 @@ async function generateTitleFromMessages(messages: CardMessage[], apiKey: string
     }
 
   } catch (error) {
-    // 捕获上面抛出的错误或fetch自身的网络错误
     console.error('调用AI生成标题失败:', error);
     return fallback();
   }
@@ -277,11 +282,8 @@ const useCardStore = create<CardState>()(
         const card = cards.find(c => c.id === id)
         if (!card) return;
 
-        // 从 settingsStore 获取包括 activeModel 在内的所有配置
-        const { apiKey, apiUrl, activeModel } = useSettingsStore.getState();
-        
-        // 调用辅助函数，传入激活的模型
-        const title = await generateTitleFromMessages(card.messages, apiKey, apiUrl, activeModel);
+        // 【修改】调用新的辅助函数，它会自己从 store 获取配置
+        const title = await generateTitleFromMessages(card.messages);
         
         get().updateCard(id, { title });
       },

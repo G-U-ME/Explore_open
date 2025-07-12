@@ -1,4 +1,4 @@
-
+// --- START OF COMPLETE AND MODIFIED FILE InputArea.tsx ---
 
 import React, { useState, useRef, useEffect } from 'react';
 import { Send, Paperclip, FileText, Image, X, ChevronDown, Globe } from 'lucide-react';
@@ -15,13 +15,31 @@ interface FilePreview {
   dataUrl?: string; 
 }
 
+/**
+ * Normalizes various math delimiters to the standard ones 
+ * that remark-math understands ($...$ and $$...$$).
+ * @param content The raw string from the AI.
+ * @returns A string with normalized math delimiters.
+ */
+function normalizeMathDelimiters(content: string): string {
+  // Replace LaTeX display math \[ ... \] with $$ ... $$
+  // The '$$$$' is necessary because '$' is a special character in JS replace, so '$$' escapes to a single '$'.
+  let normalized = content.replace(/\\\[(.*?)\\\]/gs, '$$$$$1$$$$');
+  
+  // Replace LaTeX inline math \( ... \) with $ ... $
+  // [FIX] The original '$$1$' produced '$1$', which KaTeX renders as '1'.
+  // The correct form is '$$$1$$' which produces '$' + captured_group + '$'.
+  normalized = normalized.replace(/\\\((.*?)\\\)/gs, '$$$1$$');
+  
+  return normalized;
+}
+
 export const InputArea: React.FC = () => {
   const { 
     addCard, 
     appendMessage, 
     updateMessage, 
     setIsTyping: setGlobalIsTyping, 
-    // 【改动】获取 selectedContent 和其 setter
     selectedContent, 
     setSelectedContent,
   } = useCardStore();
@@ -81,7 +99,6 @@ export const InputArea: React.FC = () => {
     try {
       const userMsgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
       
-      // 【改动】将文件信息（包括图像的dataUrl）序列化为JSON字符串
       const encodedFiles = filePreviews.map(file => JSON.stringify({
         name: file.name,
         type: file.type,
@@ -92,8 +109,8 @@ export const InputArea: React.FC = () => {
         id: userMsgId,
         role: 'user',
         content: inputText,
-        files: encodedFiles, // 使用编码后的文件信息
-        context: selectedContent || undefined, // context 字段用于存储选中的文本
+        files: encodedFiles,
+        context: selectedContent || undefined,
         timestamp: Date.now()
       };
 
@@ -102,23 +119,23 @@ export const InputArea: React.FC = () => {
         appendMessage(cardId, userMsg);
       } else {
         addCard([userMsg]);
-        const { projects, activeProjectId } = useProjectStore.getState();
-        cardId = projects.find(p => p.id === activeProjectId)?.currentCardId || null;
+        const state = useProjectStore.getState();
+        const activeProj = state.projects.find(p => p.id === state.activeProjectId);
+        cardId = activeProj?.currentCardId || null;
       }
       
-      const promptToSend = selectedContent ? `Context:\n"""\n${selectedContent}\n"""\n\nQuestion:\n${inputText}` : inputText;
-      const filesToSend = [...filePreviews];
-
       setInputText('');
-      // 【改动】清理文件和选中的文本
-      filePreviews.forEach(f => URL.revokeObjectURL(f.url)); // 释放内存
+      filePreviews.forEach(f => URL.revokeObjectURL(f.url));
       setFilePreviews([]);
       setSelectedContent(null);
-
       setTimeout(adjustTextareaHeight, 0);
       
       if (cardId) {
-        await fetchLLMStream(cardId, promptToSend, filesToSend, userMsgId);
+        const finalState = useProjectStore.getState();
+        const finalActiveProj = finalState.projects.find(p => p.id === finalState.activeProjectId);
+        const finalCurrentCard = finalActiveProj?.cards.find(c => c.id === cardId);
+        const history = finalCurrentCard?.messages || [];
+        await fetchLLMStream(cardId, history, userMsgId);
       }
 
     } catch (error) {
@@ -130,9 +147,8 @@ export const InputArea: React.FC = () => {
     }
   };
 
-  const fetchLLMStream = async (cardId: string, prompt: string, files: FilePreview[], userMsgId?: string) => {
+  const fetchLLMStream = async (cardId: string, history: CardMessage[], userMsgId?: string) => {
     const aiMsgId = userMsgId ? `${userMsgId}_ai` : `msg_${Date.now()}_${Math.random().toString(36).slice(2)}_ai`;
-    let aiContent = '';
     
     const initialAiMessage: CardMessage = {
       id: aiMsgId,
@@ -151,24 +167,55 @@ export const InputArea: React.FC = () => {
     }
 
     try {
-      let messages: any[];
-      const imageFiles = files.filter(f => f.type.startsWith('image/') && f.dataUrl);
-      if (imageFiles.length > 0) {
-        const contentParts: any[] = [{ type: 'text', text: prompt }];
-        imageFiles.forEach(file => {
-          contentParts.push({
-            type: 'image_url',
-            image_url: { url: file.dataUrl },
-          });
-        });
-        messages = [{ role: 'user', content: contentParts }];
-      } else {
-        messages = [{ role: 'user', content: prompt }];
-      }
+      const apiMessages = history.map(msg => {
+        if (msg.role === 'ai') {
+            return { role: 'assistant', content: msg.content };
+        }
+        let fullContent = msg.content;
+        if (msg.context) {
+            fullContent = `Context:\n"""\n${msg.context}\n"""\n\nQuestion:\n${msg.content}`;
+        }
+        const imageContent = (msg.files || [])
+            .map(fileString => {
+                try {
+                    const fileInfo = JSON.parse(fileString);
+                    if (fileInfo.type?.startsWith('image/') && fileInfo.dataUrl) {
+                        return { type: 'image_url', image_url: { url: fileInfo.dataUrl } };
+                    }
+                } catch (e) { /* 忽略无法解析的文件 */ }
+                return null;
+            })
+            .filter((item): item is { type: 'image_url', image_url: { url: string } } => item !== null);
+
+        if (imageContent.length > 0) {
+            return { role: 'user', content: [ { type: 'text', text: fullContent }, ...imageContent ] };
+        } else {
+            return { role: 'user', content: fullContent };
+        }
+      });
       
-      const requestBody: any = { model: activeModel, stream: true, messages: messages };
-      if (imageFiles.length > 0) { requestBody.max_tokens = 4096; }
-      if (isWebSearchEnabled) { requestBody.enable_search = true; requestBody.search_options = { provider: "biying" }; }
+      const { globalSystemPrompt, dialogueSystemPrompt } = useSettingsStore.getState();
+      const systemPromptContent = [globalSystemPrompt, dialogueSystemPrompt].filter(Boolean).join('\n\n');
+      
+      const messagesForApi = [...apiMessages];
+      if (systemPromptContent) {
+        messagesForApi.unshift({ role: 'system', content: systemPromptContent });
+      }
+
+      const hasImages = apiMessages.some(msg => 
+        Array.isArray(msg.content) && msg.content.some(part => (part as any).type === 'image_url')
+      );
+
+      const requestBody: any = { 
+        model: activeModel, 
+        stream: true, 
+        messages: messagesForApi
+      };
+      if (hasImages) { requestBody.max_tokens = 4096; }
+      if (isWebSearchEnabled) { 
+        requestBody.enable_search = true; 
+        requestBody.search_options = { provider: "biying" }; 
+      }
       
       const res = await fetch(apiUrl, {
         method: 'POST',
@@ -185,6 +232,7 @@ export const InputArea: React.FC = () => {
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
+      let aiContent = '';
       mainReadLoop: while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -201,7 +249,8 @@ export const InputArea: React.FC = () => {
                 const delta = json.choices?.[0]?.delta?.content;
                 if (delta) {
                     aiContent += delta;
-                    updateMessage(cardId, aiMsgId, { content: aiContent });
+                    const normalizedContent = normalizeMathDelimiters(aiContent);
+                    updateMessage(cardId, aiMsgId, { content: normalizedContent });
                 }
             } catch (parseError) {
                 console.warn('解析流式数据时出错 (已跳过):', parseError, 'in line:', line);
@@ -255,10 +304,9 @@ export const InputArea: React.FC = () => {
   };
 
   return (
-    <div className="bg-transparent p-4 relative z-10">
-      <div className="bg-[#3A3A3A] rounded-[16px] p-3 flex flex-col gap-3">
+    <div className="bg-transparent p-4 relative z-20"> 
+        <div className="bg-[#3A3A3A] rounded-[16px] p-3 flex flex-col gap-3">
         
-        {/* 【改动】将选中的文本显示为可编辑的文本域 */}
         {selectedContent !== null && (
           <div className="bg-[#2F2F2F] p-2 rounded-lg relative text-sm border border-dashed border-gray-600">
             <div className="flex justify-between items-start gap-2">
