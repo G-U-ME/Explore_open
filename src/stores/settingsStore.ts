@@ -29,7 +29,7 @@ export const useSettingsStore = create<SettingsState>((set) => {
   return {
     isSettingsModalOpen: false,
     apiUrl: 'https://api.lkeap.cloud.tencent.com/v1/chat/completions',
-    apiKey: '',
+    apiKey: 'sk-jsAsaJV0SCTcNhlVlkjt9pZN1x0KNS27Dn9oZJqDHdaVTwBG',
     models: initialModels,
     activeModel: initialModels[0] || '',
     
