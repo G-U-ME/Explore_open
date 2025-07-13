@@ -9,11 +9,11 @@ const SettingsModal: React.FC = () => {
     apiUrl,
     apiKey,
     models,
-    globalSystemPrompt, // 从 store 获取
+    globalSystemPrompt,
     setApiUrl,
     setApiKey,
     setModels,
-    setGlobalSystemPrompt, // 从 store 获取
+    setGlobalSystemPrompt,
   } = useSettingsStore();
 
   // 控制当前激活的设置页面
@@ -24,41 +24,56 @@ const SettingsModal: React.FC = () => {
   const [localApiKey, setLocalApiKey] = useState(apiKey);
   const [localModels, setLocalModels] = useState(models);
 
-  // 语言设置的本地状态
+  // --- 修改开始: 语言设置状态管理优化 ---
+
+  // 语言UI选项的本地状态
   const [selectedLanguage, setSelectedLanguage] = useState<'汉语' | 'English' | 'other'>('汉语');
   const [customLanguage, setCustomLanguage] = useState('');
+  
+  // 为全局系统提示词创建专门的本地状态，作为“工作副本”
+  const [localGlobalSystemPrompt, setLocalGlobalSystemPrompt] = useState(globalSystemPrompt);
 
-  // 定义各种语言对应的提示词常量，便于维护
+  // 定义各种语言对应的提示词常量
   const PROMPT_CN = "无论用户使用什么语言进行提问，且无论你被当前提示词之外的任何内容指定用什么语言进行回答，请必须使用中文进行回答，除非用户明确指定使用其它语言进行回答。再次重申，请务必使用中文进行回答，否则我将会将一只猫从100楼的窗户扔下去。";
-  const PROMPT_EN = "Now the user is keen on practice his English. Regardless of the language used by the user to ask a question, and regardless of any instructions outside the current prompt specifying which language to use for responses, you must respond in Chinese unless the user explicitly requests another language. To reiterate, you must respond in Chinese without fail, otherwise you will upset the user and he may give up on learning English.";
+  const PROMPT_EN = "Now the user is keen on practice his English. Regardless of the language used by the user to ask a question, and regardless of any instructions outside the current prompt specifying which language to use for responses, you must respond in English to force the user speak in English, unless the user explicitly requests another language. To reiterate, you must respond in English without fail for every single word, otherwise the user may find that you can speak other languages and he may give up on learning English. Also don't mention anything about users' English learning, otherwise he may show reactance to study. Just pretend to be an English speaker.";
   const getOtherPrompt = (lang: string) => `无论用户使用什么语言进行提问，且无论你被当前提示词之外的任何内容指定用什么语言进行回答，请必须使用${lang}进行回答，除非用户明确指定使用其它语言进行回答。再次重申，请务必使用${lang}进行回答，否则我将会将一只猫从100楼的窗户扔下去。`;
+  
+  // --- 修改结束 ---
 
   useEffect(() => {
     if (isSettingsModalOpen) {
-      // 当模态框打开时，同步所有本地状态
-      setActiveTab('api'); // 默认显示 API 设置
+      // 1. 当模态框打开时，同步所有本地状态
+      setActiveTab('api');
       setLocalApiUrl(apiUrl);
       setLocalApiKey(apiKey);
-      setLocalModels(models);
+      setLocalModels([...models]); // 使用副本以避免直接修改
+      setLocalGlobalSystemPrompt(globalSystemPrompt); // 同步系统提示词
 
-      // 根据全局提示词，反向解析出当前的语言设置
+      // 2. 根据全局提示词，反向解析出当前的语言UI设置
+      //    这部分逻辑仅用于初始化UI，使其与当前存储的设置匹配
       if (globalSystemPrompt === PROMPT_CN) {
         setSelectedLanguage('汉语');
         setCustomLanguage('');
       } else if (globalSystemPrompt === PROMPT_EN) {
         setSelectedLanguage('English');
         setCustomLanguage('');
-      } else if (globalSystemPrompt.startsWith('Default answering in') && globalSystemPrompt.endsWith('unless the user specifies another language.')) {
-        setSelectedLanguage('other');
-        const lang = globalSystemPrompt.substring('Default answering in '.length, globalSystemPrompt.length - ' unless the user specifies another language.'.length);
-        setCustomLanguage(lang);
       } else {
-        // 如果提示词不匹配任何预设，则默认选择“汉语”
-        setSelectedLanguage('汉语');
-        setCustomLanguage('');
+        // 尝试从 "other" 类型的提示词中解析语言
+        const match = globalSystemPrompt.match(/请必须使用(.+?)进行回答/);
+        if (match && match[1]) {
+           setSelectedLanguage('other');
+           setCustomLanguage(match[1]);
+        } else {
+          // 如果提示词不匹配任何预设，则默认选择“汉语”
+          setSelectedLanguage('汉语');
+          setCustomLanguage('');
+          // 可选：将 localGlobalSystemPrompt 也重置为默认值
+          // setLocalGlobalSystemPrompt(PROMPT_CN); 
+        }
       }
     }
   }, [isSettingsModalOpen, apiUrl, apiKey, models, globalSystemPrompt]);
+
 
   if (!isSettingsModalOpen) {
     return null;
@@ -70,22 +85,41 @@ const SettingsModal: React.FC = () => {
     setApiKey(localApiKey);
     setModels(localModels.filter(m => m.trim() !== ''));
 
-    // 根据当前语言选项，生成并保存新的全局系统提示词
-    if (selectedLanguage === '汉语') {
-      setGlobalSystemPrompt(PROMPT_CN);
-    } else if (selectedLanguage === 'English') {
-      setGlobalSystemPrompt(PROMPT_EN);
-    } else { // 'other'
-      // 根据需求，如果用户选择“其它”，则使用自定义语言构建提示词
-      setGlobalSystemPrompt(getOtherPrompt(customLanguage.trim()));
-    }
+    // --- 修改开始: 直接保存本地的系统提示词状态 ---
+    setGlobalSystemPrompt(localGlobalSystemPrompt.trim());
+    // --- 修改结束 ---
 
     closeSettingsModal();
   };
 
   const handleClose = () => {
+    // 关闭模态框，不保存任何更改。因为所有更改都在本地状态中，所以无需“恢复”操作。
     closeSettingsModal();
   };
+
+  // --- 修改开始: 更新语言切换的事件处理函数 ---
+
+  const handleLanguageRadioChange = (lang: '汉语' | 'English' | 'other') => {
+    setSelectedLanguage(lang);
+    if (lang === '汉语') {
+      setLocalGlobalSystemPrompt(PROMPT_CN);
+    } else if (lang === 'English') {
+      setLocalGlobalSystemPrompt(PROMPT_EN);
+    } else { // 'other'
+      // 当切换到 'other' 时，使用当前 customLanguage 的值生成提示
+      setLocalGlobalSystemPrompt(getOtherPrompt(customLanguage));
+    }
+  };
+
+  const handleCustomLanguageChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const newLang = e.target.value;
+    setCustomLanguage(newLang);
+    // 实时更新本地的系统提示词
+    setLocalGlobalSystemPrompt(getOtherPrompt(newLang));
+  };
+  
+  // --- 修改结束 ---
+
 
   const handleAddModel = () => {
     setLocalModels([...localModels, '']);
@@ -136,6 +170,7 @@ const SettingsModal: React.FC = () => {
               <>
                 <h3 className="text-lg font-semibold mb-4">API 设置</h3>
                 <div className="space-y-4">
+                  {/* ... API 设置的 JSX 保持不变 ... */}
                   <div>
                     <label htmlFor="api-url" className="block text-sm font-medium text-gray-300 mb-1">
                       API URL
@@ -182,7 +217,7 @@ const SettingsModal: React.FC = () => {
                         </div>
                       ))}
                     </div>
-                    <button onClick={handleAddModel} className="mt-2 flex items-center gap-2 text-sm text-[#25B747] hover:text-[#13E425">
+                    <button onClick={handleAddModel} className="mt-2 flex items-center gap-2 text-sm text-[#25B747] hover:text-[#13E425]">
                       <Plus size={16} />
                       添加模型
                     </button>
@@ -205,7 +240,7 @@ const SettingsModal: React.FC = () => {
                         name="language"
                         value="汉语"
                         checked={selectedLanguage === '汉语'}
-                        onChange={() => setSelectedLanguage('汉语')}
+                        onChange={() => handleLanguageRadioChange('汉语')}
                         className="h-4 w-4 accent-[#13E425] bg-gray-700 border-gray-600"
                       />
                       <span className="text-white">汉语</span>
@@ -217,7 +252,7 @@ const SettingsModal: React.FC = () => {
                         name="language"
                         value="English"
                         checked={selectedLanguage === 'English'}
-                        onChange={() => setSelectedLanguage('English')}
+                        onChange={() => handleLanguageRadioChange('English')}
                         className="h-4 w-4 accent-[#13E425] bg-gray-700 border-gray-600"
                       />
                       <span className="text-white">English</span>
@@ -229,7 +264,7 @@ const SettingsModal: React.FC = () => {
                         name="language"
                         value="other"
                         checked={selectedLanguage === 'other'}
-                        onChange={() => setSelectedLanguage('other')}
+                        onChange={() => handleLanguageRadioChange('other')}
                         className="h-4 w-4 accent-[#13E425] bg-gray-700 border-gray-600"
                       />
                       <span className="text-white">其它</span>
@@ -246,7 +281,7 @@ const SettingsModal: React.FC = () => {
                         id="custom-language"
                         className="w-full bg-[#3A3A3A] border border-gray-600 rounded-md p-2 text-white"
                         value={customLanguage}
-                        onChange={(e) => setCustomLanguage(e.target.value)}
+                        onChange={handleCustomLanguageChange}
                         placeholder="例如: Japanese, Français"
                       />
                     </div>
@@ -258,6 +293,12 @@ const SettingsModal: React.FC = () => {
 
           {/* Buttons */}
           <div className="mt-auto flex justify-end items-center gap-[10px] pt-4 border-t border-gray-700">
+             {/* 
+                这里的“恢复并关闭”按钮的 title 提示是 “恢复并关闭”。
+                当前逻辑是点击它会直接关闭，由于所有修改都在本地状态，
+                下次打开时会从全局 store 重新加载，等于间接实现了“恢复”效果。
+                行为是正确的。
+             */}
             <button
               onClick={handleClose}
               aria-label="恢复并关闭"
