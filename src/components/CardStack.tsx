@@ -12,59 +12,119 @@ import 'katex/dist/katex.min.css';
 import { visit } from 'unist-util-visit';
 import { Node, Parent, Literal } from 'unist';
 import rehypeSanitize, {defaultSchema} from 'rehype-sanitize';
+import rehypeRaw from 'rehype-raw';
 
-// The normalizeMathDelimiters function is moved here from InputArea.tsx
-// to be accessible by the preview card's fetch logic.
-/**
- * Normalizes various math delimiters to the standard ones 
- * that remark-math understands ($...$ and $$...$$).
- * @param content The raw string from the AI.
- * @returns A string with normalized math delimiters.
- */
+// ================================================================================================
+// #region Helper Functions & Types
+// ================================================================================================
+
+const ANIMATION_DURATION = 350; // ms, used for both JS timeouts and CSS transitions
+
+type AnimationStatus = 
+  | 'stable' 
+  | 'stable-moving'
+  | 'entering' // Generic entering state, handled by JS
+  | 'exiting-dissolve'
+  | 'exiting-fly-right'
+  | 'exiting-fly-up-right'
+  | 'exiting-shrink-out';
+
+// NEW: A hint for the animation system about the user's action
+type NavigationAction = 'create' | 'delete' | null;
+
+interface AnimatedCard {
+  id: string;
+  card: CardData;
+  status: AnimationStatus;
+  style: React.CSSProperties;
+}
+
 function normalizeMathDelimiters(content: string): string {
-  // Replace LaTeX display math \[ ... \] with $$ ... $$
   let normalized = content.replace(/\\\[(.*?)\\\]/gs, '$$$$$1$$$$');
-  // Replace LaTeX inline math \( ... \) with $ ... $
   normalized = normalized.replace(/\\\((.*?)\\\)/gs, '$$$1$$');
   return normalized;
 }
 
+function usePrevious<T>(value: T): T | undefined {
+  const ref = useRef<T>();
+  useEffect(() => {
+    ref.current = value;
+  });
+  return ref.current;
+}
 
-// [THE DEFINITIVE WORKING SOLUTION - STAGE 1: REMARK PLUGIN]
-// This plugin now generates raw HTML directly. This is the most robust method
-// when data transfer between remark and rehype is failing.
+const calculateCardPosition = (
+    depth: number,
+    centerX: number,
+    centerY: number,
+    availableHeight: number
+) => {
+    if (depth === 0) {
+        return { x: centerX, y: centerY, scale: 1, rotation: 0, blur: 0, brightness: 1, opacity: 1 };
+    }
+    if (availableHeight <= centerY || availableHeight < 100) {
+        return { x: centerX, y: centerY, scale: 0, rotation: 0, blur: 20, brightness: 0.5, opacity: 0 };
+    }
+
+    const ANGLE_STEP_DEG = 5;
+    const SCALE_STEP = 0.04; 
+    const BLUR_STEP_PX = 0.5;
+    const BRIGHTNESS_STEP = 0.05;
+
+    const chordLength = availableHeight/2;
+    const radius = chordLength/2; 
+    const circleCenterY = centerY + radius;
+    const circleCenterX = centerX;
+
+    const startAngleRad = Math.PI/2;
+    const angleStepRad = (ANGLE_STEP_DEG * Math.PI) / 180;
+    const cardAngleRad = startAngleRad + (depth * angleStepRad);
+    
+    const x = circleCenterX + radius * Math.cos(cardAngleRad);
+    const y = circleCenterY - radius * Math.sin(cardAngleRad); 
+    
+    return {
+        x, y,
+        scale: Math.max(0, 1.0 - (depth * SCALE_STEP)),
+        rotation: -ANGLE_STEP_DEG * depth,
+        blur: depth * BLUR_STEP_PX,
+        brightness: Math.max(0.6, 1 - (depth * BRIGHTNESS_STEP)),
+        opacity: 0.9
+    };
+};
+
+const findCommonAncestorId = (path1: CardData[], path2: CardData[]): string | null => {
+    const path1Ids = new Set(path1.map(c => c.id));
+    for (let i = path2.length - 1; i >= 0; i--) {
+        if (path1Ids.has(path2[i].id)) return path2[i].id;
+    }
+    return null;
+};
+// #endregion
+
+// ================================================================================================
+// #region Markdown and Rendering Components
+// ================================================================================================
+
+// ... (Components like MarkdownRenderer, PreviewCard, CurrentCardDialog, ParentCard remain unchanged)
 const remarkConceptualTerm = () => {
   return (tree: Node) => {
     visit(tree, 'text', (node: Literal, index: number | undefined, parent: Parent | undefined) => {
       const nodeValue = node.value as string;
-      if (typeof nodeValue !== 'string' || !/@@.*?@@/.test(nodeValue)) return;
-      if (!parent || !Array.isArray(parent.children) || typeof index !== 'number') return;
+      if (typeof nodeValue !== 'string' || !/@@.*?@@/.test(nodeValue) || !parent || !Array.isArray(parent.children) || typeof index !== 'number') return;
       
       const newNodes: (Node | Literal)[] = [];
       let lastIndex = 0;
       const regex = /@@(.*?)@@/g;
       let match;
-
       while ((match = regex.exec(nodeValue)) !== null) {
         if (match.index > lastIndex) {
           newNodes.push({ type: 'text', value: nodeValue.slice(lastIndex, match.index) });
         }
-        
-        const term = match[1];
-        // THE KEY CHANGE: Create an 'html' node. Its value is the exact HTML string we want.
-        // This bypasses all complex data passing.
-        newNodes.push({
-          type: 'html',
-          value: `<span class="conceptual-term">${term}</span>`,
-        });
-
+        newNodes.push({ type: 'html', value: `<span class="conceptual-term">${match[1]}</span>` });
         lastIndex = regex.lastIndex;
       }
-      
-      if (lastIndex < nodeValue.length) {
-        newNodes.push({ type: 'text', value: nodeValue.slice(lastIndex) });
-      }
-      
+      if (lastIndex < nodeValue.length) newNodes.push({ type: 'text', value: nodeValue.slice(lastIndex) });
       if (newNodes.length > 0) {
         parent.children.splice(index, 1, ...newNodes);
         return ['skip', index + newNodes.length];
@@ -73,11 +133,63 @@ const remarkConceptualTerm = () => {
   };
 };
 
-// We need rehype-raw to parse the HTML string we just created.
-import rehypeRaw from 'rehype-raw';
+const customSanitizeSchema = {
+  ...defaultSchema,
+  tagNames: [...defaultSchema.tagNames!, 'ol', 'li'],
+  attributes: {
+    ...defaultSchema.attributes,
+    span: [...(defaultSchema.attributes?.span || []), 'className', 'style'],
+    div: [...(defaultSchema.attributes?.div || []), 'className', 'style'],
+    ol: [...(defaultSchema.attributes?.ol || []), 'className', 'start'],
+    li: [...(defaultSchema.attributes?.li || []), 'className', 'checked', 'disabled'],
+  },
+};
 
+interface CustomSpanProps extends React.HTMLAttributes<HTMLSpanElement> {
+    children?: React.ReactNode;
+    node?: ExtraProps['node'];
+}
 
-// PreviewCard
+const MarkdownRenderer: React.FC<{ 
+  content: string; 
+  onTermClick?: (term: string, rect: DOMRect) => void;
+}> = React.memo(({ content, onTermClick }) => {
+  const customComponents: Components = {
+    span: ({ node, children, ...props }: CustomSpanProps) => {
+      if (props.className === 'conceptual-term') {
+        const term = React.Children.toArray(children).join('');
+        return (
+          <span
+            {...props}
+            style={{ cursor: onTermClick ? 'pointer' : 'default' }}
+            onClick={(e) => {
+              if (onTermClick) {
+                e.stopPropagation();
+                onTermClick(term, e.currentTarget.getBoundingClientRect());
+              }
+            }}
+          >
+            {children}
+          </span>
+        );
+      }
+      return <span {...props}>{children}</span>;
+    },
+  };
+  const normalizedContent = useMemo(() => normalizeMathDelimiters(content), [content]);
+  return (
+    <div className="markdown-content w-full">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm, remarkConceptualTerm, remarkMath]}
+        rehypePlugins={[rehypeRaw, rehypeKatex, [rehypeSanitize, customSanitizeSchema]]}
+        components={customComponents}
+      >
+        {normalizedContent}
+      </ReactMarkdown>
+    </div>
+  );
+});
+
 const PreviewCard: React.FC<{
   position: { top: number; left: number };
   content: string;
@@ -88,473 +200,420 @@ const PreviewCard: React.FC<{
 }> = ({ position, content, isLoading, onClose, onCreate, parentRef }) => {
   const cardWidth = parentRef.current ? parentRef.current.offsetWidth / 2 : 300;
   const cardHeight = parentRef.current ? parentRef.current.offsetHeight / 2 : 200;
-  
   const cleanContent = content.replace(/@@(.*?)@@/g, '$1');
-
+  const normalizedContent = useMemo(() => normalizeMathDelimiters(cleanContent), [cleanContent]);
   return (
     <div
-      className="fixed bg-[#222222] text-white rounded-[16px] shadow-card p-3 flex flex-col items-start justify-start text-left z-50"
-      style={{
-        left: position.left,
-        top: position.top,
-        width: cardWidth,
-        height: cardHeight,
-        transform: 'translate(10px, -50%)',
-      }}
+      className="fixed bg-[#222222] text-white rounded-[16px] shadow-card p-3 flex flex-col z-50"
+      style={{ left: position.left, top: position.top, width: cardWidth, height: cardHeight, transform: 'translate(10px, -50%)' }}
     >
       <div className="flex items-center justify-end w-full mb-1">
         <div className="flex items-center gap-2">
-          <button onClick={onCreate} className="w-7 h-7 bg-[#4C4C4C] rounded-full flex items-center justify-center shadow-card hover:bg-[#5C5C5C] transition-colors" title="基于预览创建新卡片">
+          <button onClick={onCreate} className="w-7 h-7 bg-[#4C4C4C] rounded-full flex items-center justify-center hover:bg-[#5C5C5C]" title="Create new card from preview">
             <ZoomIn className="w-4 h-4" color="#13E425" />
           </button>
-          <button onClick={onClose} className="w-6 h-6 flex items-center justify-center hover:bg-[#3C3C3C] rounded-full transition-colors" title="关闭预览">
-            <X size={14} className="text-white" />
+          <button onClick={onClose} className="w-6 h-6 flex items-center justify-center hover:bg-[#3C3C3C] rounded-full" title="Close preview">
+            <X size={14} />
           </button>
         </div>
       </div>
-      <div className="markdown-content w-full flex-1 overflow-y-auto min-h-0 text-sm [&::-webkit-scrollbar]:w-[4px] [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#888] [&::-webkit-scrollbar-thumb]:rounded-full">
+      <div className="markdown-content w-full flex-1 overflow-y-auto min-h-0 text-sm [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#888] [&::-webkit-scrollbar-thumb]:rounded-full">
         {isLoading && <Loader className="animate-spin text-gray-400 mx-auto mt-4" />}
-        <ReactMarkdown 
-            remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex, [rehypeSanitize, customSanitizeSchema]]}
-        >
-            {cleanContent}
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex, [rehypeSanitize, customSanitizeSchema]]}>
+            {normalizedContent}
         </ReactMarkdown>
       </div>
     </div>
   );
 };
 
-
-// Enhance the sanitization schema to allow styles generated by KaTeX.
-const customSanitizeSchema = {
-  ...defaultSchema,
-  // 显式声明需要保留的标签，确保列表标签不会被意外剥离。
-  tagNames: [
-    ...defaultSchema.tagNames!, // 包含所有默认标签，如 <p>, <a>, <h1> 等
-    'ol', // 允许有序列表 <ol>
-    'li', // 允许列表项 <li>
-  ],
-  attributes: {
-    ...defaultSchema.attributes,
-    // Allow className for conceptual terms and style for KaTeX on <span> tags.
-    span: [
-      ...(defaultSchema.attributes?.span || []),
-      'className',
-      'style', 
-    ],
-    // Allow className and style for KaTeX on <div> tags (for block math).
-    div: [
-        ...(defaultSchema.attributes?.div || []),
-        'className',
-        'style',
-    ],
-    // [关键修复] 明确允许 <ol> 和 <li> 标签的属性。
-    // GFM 可能会为列表添加 className，而有序列表可能需要 'start' 属性。
-    ol: [...(defaultSchema.attributes?.ol || []), 'className', 'start'],
-    li: [...(defaultSchema.attributes?.li || []), 'className', 'checked', 'disabled'], // 'checked' 和 'disabled' 用于 GFM 任务列表 [-]
-  },
-};
-
-// Define props for the span component.
-interface CustomSpanProps extends React.HTMLAttributes<HTMLSpanElement> {
-    children?: React.ReactNode;
-    node?: ExtraProps['node'];
-}
-
-// [THE DEFINITIVE WORKING SOLUTION - STAGE 3: REACT RENDERER]
-const MarkdownRenderer: React.FC<{ 
-  content: string; 
-  onTermClick: (term: string, rect: DOMRect) => void;
-}> = React.memo(({ content, onTermClick }) => {
-  const customComponents: Components = {
-    // The renderer now only needs to handle the final, parsed <span>.
-    span: ({ node, children, ...props }: CustomSpanProps) => {
-      // Check for the class and data-term attribute.
-      if (props.className === 'conceptual-term') {
-        const term = React.Children.toArray(children).join('');
-        
-        return (
-          <span
-            {...props} // Spread the props (which includes className and data-term)
-            onClick={(e) => {
-              e.stopPropagation();
-              const rect = e.currentTarget.getBoundingClientRect();
-              onTermClick(term, rect);
-            }}
-          >
-            {children}
-          </span>
-        );
-      }
-      // For any other <span>, render it normally.
-      return <span {...props}>{children}</span>;
-    },
-  };
-
-  return (
-    <div className="markdown-content w-full">
-      <ReactMarkdown
-        // The remark plugin order remains the same.
-        remarkPlugins={[remarkGfm, remarkConceptualTerm, remarkMath]}
-        // [CRITICAL] The rehype pipeline now uses rehype-raw.
-        rehypePlugins={[
-            rehypeRaw, // 1. IMPORTANT: This plugin parses the HTML string from our remark plugin.
-            rehypeKatex, // 2. Render math to HTML (default behavior).
-            [rehypeSanitize, customSanitizeSchema] // 3. Sanitize the result with our enhanced schema.
-        ]}
-        components={customComponents}
-      >
-        {content}
-      </ReactMarkdown>
-    </div>
-  );
-});
-
-
 const CurrentCardDialog: React.FC<{ 
   card: CardData; 
   cardRef?: React.RefObject<HTMLDivElement>; 
-  maxHeight?: number; 
-  maxWidth?: number;
   onDelete: () => void;
   onCreateNew: () => void;
   onTextSelection: (text: string) => void;
   onCreateFromSelection: () => void;
   onTermClick: (term: string, rect: DOMRect) => void;
-}> = ({ card, cardRef, maxHeight, maxWidth, onDelete, onCreateNew, onTextSelection, onCreateFromSelection, onTermClick }) => {
-  
+}> = ({ card, cardRef, onDelete, onCreateNew, onTextSelection, onCreateFromSelection, onTermClick }) => {
   const [selectionButton, setSelectionButton] = useState({ visible: false, top: 0, left: 0 });
-
   const handleTextSelection = useCallback(() => {
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0 && selection.toString().trim()) {
-      const selectedText = selection.toString().trim();
-      onTextSelection(selectedText); 
+      onTextSelection(selection.toString().trim()); 
       const range = selection.getRangeAt(0);
       const rect = range.getBoundingClientRect();
       const containerRect = cardRef?.current?.getBoundingClientRect();
       if (containerRect) {
-        const top = rect.top - containerRect.top;
-        const left = rect.right - containerRect.left;
-        setSelectionButton({ visible: true, top, left });
+        setSelectionButton({ visible: true, top: rect.top - containerRect.top, left: rect.right - containerRect.left });
       }
     } else {
       setSelectionButton({ visible: false, top: 0, left: 0 });
     }
   }, [onTextSelection, cardRef]);
-
   useEffect(() => {
     const handleMouseUp = () => setTimeout(handleTextSelection, 0);
     const container = cardRef?.current;
     if (container) { container.addEventListener('mouseup', handleMouseUp); }
     return () => { if (container) { container.removeEventListener('mouseup', handleMouseUp); } };
   }, [cardRef, handleTextSelection]);
-
   const handleCreateFromSelectionClick = () => {
     onCreateFromSelection();
     setSelectionButton({ visible: false, top: 0, left: 0 });
   };
-
   return (
     <div
       ref={cardRef}
-      className="bg-[#222222] text-white rounded-[24px] shadow-card p-4 flex flex-col items-start justify-start text-left transform scale-100 relative h-full w-full"
-      style={{
-        boxShadow: '-4px 8px 24px rgba(0, 0, 0, 0.3)',
-      }}
+      className="bg-[#222222] text-white rounded-[24px] shadow-card p-4 flex flex-col h-full w-full"
+      style={{ boxShadow: '-4px 8px 24px rgba(0, 0, 0, 0.3)' }}
     >
       <style>{`
-        .conceptual-term { 
-          display: inline;
-          cursor: pointer;
-          text-decoration: none;
-          transition: all 0.2s;
-          color: #FFFFFF;
-          font-weight: 500;
-          border-bottom: 1px dotted #888;
-        }
-        .conceptual-term:hover { 
-          border-bottom: 1px solid #FFF;
-        }
-
-        /* [关键修复] 添加样式以恢复被 Tailwind CSS 重置的列表外观 */
-        .markdown-content ul, .markdown-content ol {
-          padding-left: 1.75rem; /* 为列表标记添加缩进 */
-          margin-top: 0.5rem;
-          margin-bottom: 0.5rem;
-          list-style-position: outside;
-        }
-        .markdown-content ol {
-          list-style-type: decimal; /* 为有序列表渲染数字 */
-        }
-        .markdown-content ul {
-          list-style-type: disc; /* 为无序列表渲染项目符号 */
-        }
-        .markdown-content li {
-          margin-bottom: 0.25rem;
-        }
-        .markdown-content li::marker {
-           color: #a0a0a0; /* 可选：设置列表标记本身的样式 */
-        }
+        .conceptual-term { cursor: pointer; font-weight: 500; border-bottom: 1px dotted #888; transition: border-bottom 0.2s; }
+        .conceptual-term:hover { border-bottom: 1px solid #FFF; }
+        .markdown-content ul, .markdown-content ol { padding-left: 1.75rem; margin-block: 0.5rem; }
+        .markdown-content ol { list-style-type: decimal; }
+        .markdown-content ul { list-style-type: disc; }
+        .markdown-content li { margin-bottom: 0.25rem; }
       `}</style>
       
       {selectionButton.visible && (
         <button
           onClick={handleCreateFromSelectionClick}
-          className="w-9 h-9 bg-[#4C4C4C] rounded-full flex items-center justify-center hover:bg-[#5C5C5C] transition-colors absolute z-10"
-          title="基于选中内容创建新卡片并提问"
-          style={{ top: `${selectionButton.top}px`, left: `${selectionButton.left}px`, transform: 'translate(-50%, -120%)' }}
+          className="w-9 h-9 bg-[#4C4C4C] rounded-full flex items-center justify-center hover:bg-[#5C5C5C] absolute z-10"
+          title="Create new card from selection"
+          style={{ top: selectionButton.top, left: selectionButton.left, transform: 'translate(-50%, -120%)' }}
         >
             <ZoomIn className="w-5 h-5" color="#13E425" />
         </button>
       )}
 
       <div className="flex items-center justify-between w-full mb-2 pb-1 border-b border-[#333]">
-        <span className="font-normal text-title leading-[36px] flex-1 truncate pr-2">{card.title || '无标题卡片'}</span>
+        <span className="font-normal text-title leading-9 flex-1 truncate pr-2">{card.title || 'Untitled Card'}</span>
         <div className="flex items-center gap-2">
-          <button onClick={onCreateNew} className="w-9 h-9 bg-[#4C4C4C] rounded-full flex items-center justify-center shadow-card hover:bg-[#5C5C5C] transition-colors" title="创建新卡片">
+          <button onClick={onCreateNew} className="w-9 h-9 bg-[#4C4C4C] rounded-full flex items-center justify-center shadow-card hover:bg-[#5C5C5C]" title="Create new card">
             <ZoomIn className="w-5 h-5" color="#13E425" />
           </button>
-          <button onClick={onDelete} className="w-7 h-7 flex items-center justify-center hover:bg-[#3C3C3C] rounded-full transition-colors" title="删除当前卡片及其所有子孙">
-            <X size={16} className="text-white" />
+          <button onClick={onDelete} className="w-7 h-7 flex items-center justify-center hover:bg-[#3C3C3C] rounded-full" title="Delete this card and its children">
+            <X size={16} />
           </button>
         </div>
       </div>
-      <div className="w-full flex-1 overflow-y-auto min-h-0 [&::-webkit-scrollbar]:w-[6px] [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#D9D9D9] [&::-webkit-scrollbar-thumb]:rounded-full [&::-webkit-scrollbar-button]:hidden">
+      <div className="w-full flex-1 overflow-y-auto min-h-0 [&::-webkit-scrollbar]:w-[6px] [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#D9D9D9] [&::-webkit-scrollbar-thumb]:rounded-full pr-2">
         {card.messages && card.messages.length > 0 ? (
-          <div className="flex flex-col gap-2 pr-4"> 
+          <div className="flex flex-col gap-4"> 
             {card.messages.map((msg, idx) => (
               msg.role === 'user' ? (
                 <div key={msg.id || idx} className="flex justify-end">
-                  <div className="w-full flex flex-col items-end gap-2">
-                    {msg.context && (
-                        <div className="bg-[#4C4C4C] rounded-[16px_4px_16px_16px] px-3 py-2 max-w-[80%]">
-                            <p className="font-normal text-content leading-[28px] text-white whitespace-pre-wrap">{msg.context}</p>
-                        </div>
-                    )}
-                    {msg.files && msg.files.map((fileString, fileIdx) => {
-                      try {
-                        const fileInfo = JSON.parse(fileString);
-                        return (
-                          <div key={fileIdx} className="bg-[#4C4C4C] rounded-[16px_4px_16px_16px] p-2 max-w-[80%] w-fit">
-                            {fileInfo.type?.startsWith('image/') && fileInfo.dataUrl ? (
-                                <img src={fileInfo.dataUrl} alt={fileInfo.name} className="max-w-full max-h-80 rounded-lg object-contain" />
-                            ) : (
-                                <div className="flex items-center gap-2 p-1">
-                                    <FileText size={20} className="text-white flex-shrink-0" />
-                                    <span className="font-normal text-sm text-white truncate">{fileInfo.name}</span>
-                                </div>
-                            )}
-                          </div>
-                        );
-                      } catch (e) { return null; }
-                    })}
-                    {msg.content.trim() && (
-                        <div className="bg-[#4C4C4C] rounded-[16px_4px_16px_16px] px-3 py-2 max-w-[100%]">
-                            <span className="font-normal text-content leading-[28px] text-white whitespace-pre-wrap">{msg.content}</span>
-                        </div>
-                    )}
+                  <div className="bg-[#4C4C4C] rounded-[16px_4px_16px_16px] px-3 py-2 max-w-[90%]">
+                    <span className="text-content whitespace-pre-wrap">{msg.content}</span>
                   </div>
                 </div>
               ) : (
-                <div key={msg.id || idx} className="flex justify-start text-white text-content leading-[28px] max-w-full">
+                <div key={msg.id || idx} className="text-content max-w-full">
                   <MarkdownRenderer content={msg.content} onTermClick={onTermClick} />
                 </div>
               )
             ))}
           </div>
         ) : (
-          <div className="text-center text-[#888] text-lg leading-[28px] py-4">Start Explore</div>
+          <div className="text-center text-[#888] text-lg py-4">Start Exploring</div>
         )}
       </div>
     </div>
   );
 };
 
-
-const ParentCard: React.FC<{
-  card: CardData;
+const ParentCard: React.FC<{ 
+  card: CardData; 
   onClick: () => void;
-}> = ({ card, onClick }) => {
+  onHoverStart: () => void;
+  onHoverEnd: () => void;
+}> = ({ card, onClick, onHoverStart, onHoverEnd }) => {
   return (
     <div
       className="absolute top-0 left-0 w-full h-full cursor-pointer transition-all duration-300 ease-in-out bg-[#222222] rounded-[24px] shadow-card"
-      onClick={onClick}
-      onMouseEnter={(e) => {
-        const currentTransform = e.currentTarget.style.transform;
-        const currentFilter = e.currentTarget.style.filter;
-        // Apply hover effect without breaking existing animations
-        if (currentTransform.includes('scale')) {
-            e.currentTarget.style.transform = currentTransform.replace(/scale\((.*?)\)/, (match, g1) => `scale(${parseFloat(g1) * 1.05})`);
-        }
-        e.currentTarget.dataset.originalFilter = currentFilter;
-        e.currentTarget.style.filter = 'blur(0px) brightness(1)';
+      onClick={() => {
+        onHoverEnd(); // 立即清除悬浮状态
+        onClick();    // 然后执行卡片切换
       }}
-      onMouseLeave={(e) => {
-        const currentTransform = e.currentTarget.style.transform;
-        // Revert hover effect
-        if (currentTransform.includes('scale')) {
-            e.currentTarget.style.transform = currentTransform.replace(/scale\((.*?)\)/, (match, g1) => `scale(${parseFloat(g1) / 1.05})`);
-        }
-        e.currentTarget.style.filter = e.currentTarget.dataset.originalFilter || '';
-      }}
+      onMouseEnter={onHoverStart} // Report that hover has started
+      onMouseLeave={onHoverEnd}   // Report that hover has ended
     >
-      <div className="p-4 h-full flex flex-col text-white">
-        <div className="font-normal text-title leading-[36px] mb-2 truncate">
-          {card.title || '无标题卡片'}
+      <div className="p-4 h-full flex flex-col text-white overflow-hidden pointer-events-none">
+        <div className="font-normal text-title leading-9 mb-2 pb-1 border-b border-[#333] truncate">
+          {card.title || 'Untitled Card'}
         </div>
-        <div className="flex-1 overflow-hidden text-[#888] text-sm">
+        <div className="w-full flex-1 overflow-hidden min-h-0 relative text-sm">
+          <div className="absolute bottom-0 left-0 w-full h-10 bg-gradient-to-t from-[#222222] to-transparent z-10" />
           {card.messages && card.messages.length > 0 ? (
-            <div className="line-clamp-3">
-              {card.messages.map(m => m.content).join(' ') || '暂无内容'}
+            <div className="flex flex-col gap-4 pr-2"> 
+              {card.messages.slice(0, 5).map((msg, idx) => (
+                msg.role === 'user' ? (
+                  <div key={msg.id || idx} className="flex justify-end">
+                    <div className="bg-[#4C4C4C] rounded-[16px_4px_16px_16px] px-3 py-2 max-w-[90%]">
+                      <span className="text-content whitespace-pre-wrap">{msg.content}</span>
+                    </div>
+                  </div>
+                ) : (
+                  <div key={msg.id || idx} className="text-content max-w-full">
+                    <MarkdownRenderer content={msg.content} />
+                  </div>
+                )
+              ))}
             </div>
           ) : (
-            '暂无内容'
+            <div className="text-center text-[#888] py-4">No content</div>
           )}
         </div>
       </div>
     </div>
   );
 };
+// #endregion
 
-const calculateCardPosition = (
-  index: number,
-  centerX: number,
-  centerY: number,
-  availableHeight: number
+// ================================================================================================
+// #region Animation Hook (REWRITTEN TO FIX ANIMATION JUMP)
+// ================================================================================================
+
+
+const useAnimation = (
+    currentCardId: string | null,
+    getCardPath: (id: string) => CardData[],
+    dimensions: { centerX: number; centerY: number; availableHeight: number; cardWidth: number, cardHeight: number },
+    setCurrentCard: (id: string | null) => void,
+    navigationAction: React.MutableRefObject<NavigationAction>
 ) => {
-  if (availableHeight <= centerY) {
-    return { x: centerX, y: centerY + index * 20 };
-  }
-  const chordLength = availableHeight - centerY;
-  const R = chordLength / Math.sqrt(3);
-  const circleCenterY = (centerY + availableHeight) / 2;
-  const distToCenter = R * 0.5;
-  const circleCenterX = centerX + distToCenter;
-  const startAngle = Math.PI / 3;
-  const fixedAngleStep = (5 * Math.PI) / 180;
-  const cardAngle = startAngle - index * fixedAngleStep;
-  const x = circleCenterX - R * Math.cos(cardAngle);
-  const y = circleCenterY - R * Math.sin(cardAngle);
-  return { x, y };
+    // NEW: Stagger delay for sequential animations (in milliseconds)
+    const STAGGER_DELAY_MS = 50;
+
+    const [animatingCards, setAnimatingCards] = useState<AnimatedCard[]>([]);
+    const [isAnimating, setIsAnimating] = useState(false);
+    const [pendingFinalTarget, setPendingFinalTarget] = useState<string | null>(null);
+    const prevCardId = usePrevious(currentCardId);
+
+    useEffect(() => {
+        if (!isAnimating && pendingFinalTarget) {
+            const target = pendingFinalTarget;
+            setPendingFinalTarget(null);
+            setCurrentCard(target);
+        }
+    }, [isAnimating, pendingFinalTarget, setCurrentCard]);
+
+
+    useEffect(() => {
+        if (isAnimating || currentCardId === prevCardId) {
+            return;
+        }
+
+        const oldPath = prevCardId ? getCardPath(prevCardId) : [];
+        const newPath = currentCardId ? getCardPath(currentCardId) : [];
+
+        let animationType = 'init';
+        if (oldPath.length > 0 && newPath.length > 0) {
+            const isPrefix = (shortPath: CardData[], longPath: CardData[]) => {
+                if (shortPath.length >= longPath.length) return false;
+                return shortPath.every((card, index) => card.id === longPath[index]?.id);
+            };
+
+            if (navigationAction.current === 'delete') {
+                animationType = 'DELETE';
+            } else if (isPrefix(oldPath, newPath)) {
+                animationType = navigationAction.current === 'create' ? 'CREATE_CHILD' : 'SWITCH_TO_CHILD';
+            } else if (isPrefix(newPath, oldPath)) {
+                animationType = 'SWITCH_TO_PARENT';
+            } else if (oldPath[oldPath.length-1].parentId === newPath[newPath.length-1].parentId) {
+                animationType = 'SWITCH_SIBLING';
+            } else {
+                animationType = 'SWITCH_UNRELATED';
+            }
+        } else if (newPath.length > 0) {
+            animationType = 'CREATE_CHILD';
+        }
+        
+        if (animationType === 'SWITCH_UNRELATED') {
+            const commonAncestorId = findCommonAncestorId(oldPath, newPath);
+            if (commonAncestorId && commonAncestorId !== currentCardId) {
+                setPendingFinalTarget(currentCardId);
+                setCurrentCard(commonAncestorId);
+                return;
+            }
+        }
+        
+        const runAnimation = (fromPath: CardData[], toPath: CardData[], type: string) => {
+            setIsAnimating(true);
+            const allCardsData = new Map<string, CardData>();
+            [...fromPath, ...toPath].forEach(c => allCardsData.set(c.id, c));
+            const allIds = Array.from(allCardsData.keys());
+
+            const cardStates = allIds.map(id => {
+                const cardData = allCardsData.get(id)!;
+                const oldIdx = fromPath.findIndex(c => c.id === id);
+                const newIdx = toPath.findIndex(c => c.id === id);
+                const oldDepth = oldIdx !== -1 ? fromPath.length - 1 - oldIdx : -1;
+                const newDepth = newIdx !== -1 ? toPath.length - 1 - newIdx : -1;
+                
+                const isEntering = oldDepth === -1;
+                const isExiting = newDepth === -1;
+
+                const initialPos = calculateCardPosition(oldDepth, dimensions.centerX, dimensions.centerY, dimensions.availableHeight);
+                const finalPos = calculateCardPosition(newDepth, dimensions.centerX, dimensions.centerY, dimensions.availableHeight);
+
+                let status: AnimationStatus = 'stable-moving';
+                let initialTransform = `translate(-50%, -50%) rotate(${initialPos.rotation}deg) scale(${initialPos.scale})`;
+                let delay = '0ms';
+                
+                if (isEntering) {
+                    status = 'entering';
+                    if ((type === 'SWITCH_TO_CHILD' || type === 'CREATE_CHILD') && toPath.length - fromPath.length > 0) {
+                        const baseDelay = (type === 'CREATE_CHILD' ? 0 : 50);
+                        delay = `${baseDelay + (newIdx - fromPath.length) * STAGGER_DELAY_MS}ms`;
+                    }
+
+                    if (type === 'CREATE_CHILD') { 
+                        initialTransform = `translate(-50%, -150%) scale(1.2) rotate(0deg)`;
+                    } else if (type === 'SWITCH_TO_CHILD') {
+                        initialTransform = `translate(-40%, -55%) scale(1.2) rotate(5deg)`;
+                    } else if (type === 'SWITCH_SIBLING') { 
+                        initialTransform = `translate(-150%, -50%) scale(1) rotate(0deg)`;
+                    }
+                } else if (isExiting) {
+                     if (type === 'DELETE' && oldDepth === 0) status = 'exiting-dissolve';
+                    else if (type === 'SWITCH_TO_PARENT') {
+                        status = 'exiting-fly-up-right';
+                        if (fromPath.length - toPath.length > 0) {
+                           delay = `${oldDepth * STAGGER_DELAY_MS}ms`;
+                        }
+                    }
+                    else if (type === 'SWITCH_SIBLING' && oldDepth === 0) status = 'exiting-fly-right';
+                    else if (type === 'CREATE_CHILD' && fromPath.length >= 24) status = 'exiting-shrink-out';
+                    else status = 'exiting-dissolve';
+                } 
+                else if (type === 'SWITCH_TO_PARENT' && !isExiting) {
+                    const numSteps = fromPath.length - toPath.length;
+                    if (numSteps > 0) {
+                        delay = `${(numSteps - 1) * STAGGER_DELAY_MS}ms`;
+                    }
+                }
+
+                const initialStyle: React.CSSProperties = {
+                    width: dimensions.cardWidth, height: dimensions.cardHeight,
+                    left: initialPos.x, top: initialPos.y,
+                    transform: initialTransform,
+                    filter: `blur(${initialPos.blur}px) brightness(${initialPos.brightness})`,
+                    opacity: isEntering ? 0 : initialPos.opacity,
+                    zIndex: 25 - (isEntering ? newDepth : oldDepth),
+                    transitionDelay: (status === 'entering' || status === 'stable-moving') ? delay : undefined,
+                    animationDelay: (status.startsWith('exiting-')) ? delay : undefined,
+                };
+
+                const finalStyle: React.CSSProperties = {
+                    ...initialStyle,
+                    left: finalPos.x, top: finalPos.y,
+                    transform: `translate(-50%, -50%) rotate(${finalPos.rotation}deg) scale(${finalPos.scale})`,
+                    filter: `blur(${finalPos.blur}px) brightness(${finalPos.brightness})`,
+                    opacity: finalPos.opacity,
+                    zIndex: 25 - newDepth,
+                };
+                
+                return { id, card: cardData, status, initialStyle, finalStyle, isExiting };
+            });
+
+            setAnimatingCards(cardStates.map(s => ({ id: s.id, card: s.card, status: s.status, style: s.initialStyle })));
+            
+            setTimeout(() => {
+                setAnimatingCards(current => current.map(animatingCard => {
+                    const state = cardStates.find(s => s.id === animatingCard.id);
+                    if (!state) return animatingCard;
+                    if (state.isExiting) {
+                        return { ...animatingCard, status: state.status };
+                    }
+                    return { ...animatingCard, style: state.finalStyle, status: 'stable-moving' };
+                }));
+            }, 20);
+
+            const maxDelay = cardStates.reduce((max, s) => Math.max(max, parseInt(s.initialStyle.transitionDelay || '0') + parseInt(s.initialStyle.animationDelay || '0')), 0);
+            const totalDuration = ANIMATION_DURATION + maxDelay;
+
+            setTimeout(() => {
+                setAnimatingCards([]);
+                setIsAnimating(false);
+            }, totalDuration + 100);
+        };
+        
+        runAnimation(oldPath, newPath, animationType);
+        if (navigationAction.current) navigationAction.current = null;
+
+    }, [currentCardId, getCardPath, dimensions, setCurrentCard, navigationAction]);
+
+    return animatingCards;
 };
 
-// A helper hook to get the previous value of a prop or state.
-function usePrevious<T>(value: T): T | undefined {
-  const ref = useRef<T>();
-  useEffect(() => {
-    ref.current = value;
-  });
-  return ref.current;
-}
+// #endregion
 
-interface CardStackProps {
+// ================================================================================================
+// #region Main CardStack Component
+// ================================================================================================
+
+export const CardStack: React.FC<{
   centerY: number;
   availableHeight: number;
   centerAreaWidth: number;
-}
-
-export const CardStack: React.FC<CardStackProps> = ({ centerY, availableHeight, centerAreaWidth }) => {
-  const {
-    addCard,
-    setCurrentCard,
-    getCardPath,
-    deleteCardAndDescendants,
-    setSelectedContent,
-    selectedContent,
-    generateTitle,
-    isTyping,
-    appendMessage,
-    updateMessage,
-    setIsTyping: setGlobalIsTyping
-  } = useCardStore();
+}> = ({ centerY, availableHeight, centerAreaWidth }) => {
+  const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle } = useCardStore();
   const { projects, activeProjectId } = useProjectStore();
   const { apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt } = useSettingsStore();
+  
+  // NEW: State to track the hovered card ID
+  const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
 
   const activeProject = projects.find(p => p.id === activeProjectId);
   const cards = activeProject?.cards || [];
   const currentCardId = activeProject?.currentCardId || null;
   const currentCard = cards.find(c => c.id === currentCardId);
-  const currentCardRef = useRef<HTMLDivElement>(null);
   
-  type PreviewState = {
-    visible: boolean;
-    top: number;
-    left: number;
-    content: string;
-    isLoading: boolean;
-    sourceTerm: string;
-  };
-  const [previewState, setPreviewState] = useState<PreviewState>({
-    visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: ''
-  });
+  const prevCardId = usePrevious(currentCardId);
+
+  const lastMessageContent = currentCard?.messages?.[currentCard.messages.length - 1]?.content;
+
+  const currentCardRef = useRef<HTMLDivElement>(null);
+  const navigationAction = useRef<NavigationAction>(null);
+  const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: '' });
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
 
-  const MAX_PARENTS_TO_DISPLAY = 24;
-  const cardPath = currentCard ? getCardPath(currentCard.id) : [];
-  const displayPath = cardPath.slice(-(MAX_PARENTS_TO_DISPLAY + 1));
-  const prevDisplayPath = usePrevious(displayPath);
-  
-  // [FIX] The animation state now only tracks the animation type and target.
-  const [animationState, setAnimationState] = useState<{ type: 'idle' | 'animating-in', cardId: string | null }>({ type: 'idle', cardId: null });
-  const [exitingCard, setExitingCard] = useState<{ card: CardData; depth: number } | null>(null);
+  const dimensions = useMemo(() => ({
+      centerX: centerAreaWidth / 2,
+      centerY: centerY,
+      availableHeight: availableHeight,
+      cardWidth: centerAreaWidth * 0.75,
+      cardHeight: availableHeight * 0.75,
+  }), [centerAreaWidth, centerY, availableHeight]);
 
-  useEffect(() => {
-    setPortalRoot(document.getElementById('portal-root'));
-  }, []);
+  const animatedCards = useAnimation(currentCardId, getCardPath, dimensions, setCurrentCard, navigationAction);
 
+  useEffect(() => { setPortalRoot(document.getElementById('portal-root')); }, []);
   useEffect(() => {
-    if (isTyping || !currentCardId || !currentCard || currentCard.messages.length === 0) return;
-    const timerId = setTimeout(() => { generateTitle(currentCardId); }, 1500);
-    return () => clearTimeout(timerId);
-  }, [currentCardId, currentCard?.messages, isTyping, generateTitle]);
-  
-  // [FIX 1/2] This effect DETECTS a new card and sets the animation state.
-  useEffect(() => {
-    if (currentCard && prevDisplayPath && displayPath.length > prevDisplayPath.length) {
-      const isNewCard = !prevDisplayPath.some(c => c.id === currentCard.id);
-      if (isNewCard) {
-        setAnimationState({ type: 'animating-in', cardId: currentCard.id });
-      }
+    if (!currentCardId || !currentCard) return;
+
+    // 如果卡片没有消息，或者已经有了一个不是占位符的有效标题，则不进行生成
+    if (currentCard.messages.length === 0 || (currentCard.title && currentCard.title !== '新卡片')) {
+        return;
     }
-    
-    if (prevDisplayPath && cardPath.length > prevDisplayPath.length && prevDisplayPath.length > MAX_PARENTS_TO_DISPLAY) {
-        const cardToExit = prevDisplayPath[0];
-        setExitingCard({ card: cardToExit, depth: MAX_PARENTS_TO_DISPLAY + 1 });
-        const timer = setTimeout(() => setExitingCard(null), 500);
-        return () => clearTimeout(timer);
-    }
-  }, [displayPath, prevDisplayPath, cardPath, currentCard]);
+    const timer = setTimeout(() => generateTitle(currentCardId), 3000); // 3 second delay
+    return () => clearTimeout(timer);
+  }, [currentCardId, currentCard?.messages.length, currentCard?.title, generateTitle, lastMessageContent]);
 
-  // [FIX 2/2] This effect RESETS the animation state on the next tick, triggering the transition.
-  useEffect(() => {
-    if (animationState.type === 'animating-in') {
-      // Use requestAnimationFrame to ensure the state is reset *after* the browser
-      // has processed the initial styles from the first render.
-      const handle = requestAnimationFrame(() => {
-        setAnimationState({ type: 'idle', cardId: null });
-      });
-      return () => cancelAnimationFrame(handle);
-    }
-  }, [animationState]);
-
-  // --- MODIFICATION END ---
-
-
-  // AI-related functions (fetchAIForPreview, triggerAIForCard) - no changes
   const fetchAIForPreview = async (term: string) => {
     if (!apiUrl || !apiKey || !activeModel) {
       setPreviewState((prev) => ({ ...prev, content: "API settings are missing.", isLoading: false }));
       return;
     }
-
+    const userPrompt = `Please provide a concise explanation for the term: "${term}".`;
     const systemPromptContent = [globalSystemPrompt, dialogueSystemPrompt].filter(Boolean).join('\n\n');
     const messages: { role: 'system' | 'user'; content: string }[] = [];
     if (systemPromptContent) {
       messages.push({ role: 'system', content: systemPromptContent });
     }
-    messages.push({ role: 'user', content: term });
+    messages.push({ role: 'user', content: userPrompt });
 
     try {
       const res = await fetch(apiUrl, {
@@ -608,245 +667,172 @@ export const CardStack: React.FC<CardStackProps> = ({ centerY, availableHeight, 
     }
   };
 
-  const triggerAIForCard = async (cardId: string, history: CardMessage[]) => {
-    setGlobalIsTyping(true);
-    const aiMsgId = `msg_${Date.now()}_ai`;
-    appendMessage(cardId, { id: aiMsgId, role: 'ai', content: '', timestamp: Date.now() });
-
-    try {
-      const systemPromptContent = [globalSystemPrompt, dialogueSystemPrompt].filter(Boolean).join('\n\n');
-      const apiMessages = history.map(msg => ({
-        role: msg.role === 'ai' ? 'assistant' : 'user',
-        content: msg.content
-      }));
-
-      if (systemPromptContent) {
-        apiMessages.unshift({ role: 'system', content: systemPromptContent });
-      }
-
-      const res = await fetch(apiUrl, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${apiKey}` },
-        body: JSON.stringify({ model: activeModel, messages: apiMessages, stream: true }),
-      });
-
-      if (!res.ok || !res.body) {
-        throw new Error(`API Error: ${res.statusText}`);
-      }
-
-      const reader = res.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-      let aiContent = '';
-
-      mainReadLoop: while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
-
-        buffer += decoder.decode(value, { stream: true });
-        let boundary;
-        while ((boundary = buffer.indexOf('\n')) !== -1) {
-          const line = buffer.substring(0, boundary).trim();
-          buffer = buffer.substring(boundary + 1);
-
-          if (line === '' || !line.startsWith('data: ')) continue;
-
-          const data = line.substring(6);
-          if (data === '[DONE]') break mainReadLoop;
-
-          try {
-            const json = JSON.parse(data);
-            const delta = json.choices?.[0]?.delta?.content;
-            if (delta) {
-              aiContent += delta;
-              const normalizedContent = normalizeMathDelimiters(aiContent);
-              updateMessage(cardId, aiMsgId, { content: normalizedContent });
-            }
-          } catch (e) {
-            console.warn('Stream parsing error:', e);
-          }
-        }
-      }
-    } catch (error) {
-      console.error('AI call failed:', error);
-      updateMessage(cardId, aiMsgId, { content: 'AI response failed.' });
-    } finally {
-      setGlobalIsTyping(false);
-    }
-  };
-
   const handleTermClick = (term: string, rect: DOMRect) => {
     setPreviewState({ visible: true, isLoading: true, sourceTerm: term, content: '', top: rect.top + rect.height / 2, left: rect.right });
     fetchAIForPreview(term);
   };
-  const handlePreviewClose = () => { setPreviewState({ ...previewState, visible: false }); };
-  const handlePreviewCreate = () => {
+  
+  const handleCreateCard = (messages: CardMessage[], parentId?: string) => {
+    navigationAction.current = 'create';
+    addCard(messages, parentId);
+  };
+
+  const handleCreateFromPreview = () => {
+    if (!previewState.sourceTerm || !previewState.content) return;
     const userMsg: CardMessage = { id: `msg_${Date.now()}_user`, role: 'user', content: previewState.sourceTerm, timestamp: Date.now() };
     const aiMsg: CardMessage = { id: `msg_${Date.now()}_ai`, role: 'ai', content: previewState.content, timestamp: Date.now() };
-    addCard([userMsg, aiMsg], currentCardId || undefined);
-    handlePreviewClose();
+    handleCreateCard([userMsg, aiMsg], currentCardId || undefined);
+    setPreviewState(p => ({...p, visible: false}));
   };
+
   const handleCreateFromSelection = () => {
     if (!selectedContent) return;
-    const userMsg: CardMessage = { id: `msg_${Date.now()}_user`, role: 'user', content: selectedContent, timestamp: Date.now() };
-    addCard([userMsg], currentCardId || undefined);
+    handleCreateCard([{ id: `msg_${Date.now()}`, role: 'user', content: selectedContent, timestamp: Date.now() }], currentCardId || undefined);
     setSelectedContent(null);
-    setTimeout(() => {
-      const state = useProjectStore.getState();
-      const project = state.projects.find(p => p.id === state.activeProjectId);
-      const newCardId = project?.currentCardId;
-      const newCard = project?.cards.find(c => c.id === newCardId);
-      if (newCardId && newCard?.messages) {
-        triggerAIForCard(newCardId, newCard.messages);
-      }
-    }, 0);
   };
-  const handleDelete = () => { if (currentCardId) { deleteCardAndDescendants(currentCardId); } };
-  const handleCreateNew = () => { addCard([], currentCardId || undefined); };
-  const handleParentCardClick = (cardId: string) => { setCurrentCard(cardId); };
-  const handleTextSelection = (text: string) => { setSelectedContent(text); };
+  
+  const handleDelete = (id: string) => {
+    navigationAction.current = 'delete';
+    deleteCardAndDescendants(id);
+  };
 
+  const cardsToRender = useMemo(() => {
+      if (animatedCards && animatedCards.length > 0) {
+          return animatedCards;
+      }
 
-  const centerX = centerAreaWidth / 2;
-  const currentCardWidth = centerAreaWidth * 0.75;
-  const currentCardHeight = availableHeight * 0.75;
+      const isTransitioning = currentCardId !== prevCardId;
+      const idForStableRender = isTransitioning && prevCardId ? prevCardId : currentCardId;
+
+      const stablePath = idForStableRender ? getCardPath(idForStableRender) : [];
+      
+      return stablePath.map((card, index) => {
+          const depth = stablePath.length - 1 - index;
+          const pos = calculateCardPosition(depth, dimensions.centerX, dimensions.centerY, dimensions.availableHeight);
+          return {
+              id: card.id,
+              card: card,
+              status: 'stable' as AnimationStatus,
+              style: {
+                  width: dimensions.cardWidth, height: dimensions.cardHeight,
+                  left: pos.x, top: pos.y,
+                  transform: `translate(-50%, -50%) rotate(${pos.rotation}deg) scale(${pos.scale})`,
+                  filter: `blur(${pos.blur}px) brightness(${pos.brightness})`,
+                  opacity: pos.opacity,
+                  zIndex: 25 - depth,
+                  // REMOVED: Redundant transition property to prevent animation flash.
+                  // The '.card-container' class handles this.
+              }
+          };
+      });
+  }, [animatedCards, currentCardId, prevCardId, getCardPath, dimensions, cards]);
 
   return (
     <div className="w-full h-full relative overflow-visible z-0">
       <style>{`
-        .card-exiting {
-          animation: card-shrink-out 0.5s ease-in-out forwards;
+        .card-container {
+          position: absolute;
+          /* Apply transition to all cards, controlled by JS logic */
+          transition: all ${ANIMATION_DURATION}ms ease-in-out;
         }
-        @keyframes card-shrink-out {
-          to {
-            transform: var(--transform-end-exit) scale(0.5);
-            opacity: 0;
-          }
+        
+        .card-container.exiting-dissolve { 
+          animation: card-dissolve ${ANIMATION_DURATION}ms forwards ease-in-out; 
+        }
+        @keyframes card-dissolve { 
+          to { opacity: 0; transform: translate(-50%, -50%) scale(0.95); } 
+        }
+
+        .card-container.exiting-fly-right { 
+          animation: card-fly-right ${ANIMATION_DURATION}ms forwards ease-in-out; 
+        }
+        @keyframes card-fly-right { 
+          to { opacity: 0; transform: translate(30%, -50%) scale(1); } 
+        }
+        
+        .card-container.exiting-fly-up-right { 
+          animation: card-fly-up-right ${ANIMATION_DURATION}ms forwards ease-in-out; 
+        }
+        @keyframes card-fly-up-right { 
+          to { opacity: 0; transform: translate(-40%, -55%) scale(1.2) rotate(5deg); } 
+        }
+        
+        .card-container.exiting-shrink-out { 
+          animation: card-shrink-out ${ANIMATION_DURATION}ms forwards ease-in-out; 
+        }
+        @keyframes card-shrink-out { 
+          from { opacity: 0.8; }
+          to { opacity: 0; transform: translate(-50%, -50%) scale(0.5); } 
         }
       `}</style>
       
-      {!currentCard ? (
-        <div className="absolute pointer-events-none" style={{ left: centerX, top: centerY, transform: 'translate(-50%, -50%)' }}>
+      {!currentCard && cardsToRender.length === 0 ? (
+        <div className="absolute pointer-events-none" style={{ left: dimensions.centerX, top: dimensions.centerY, transform: 'translate(-50%, -50%)' }}>
           <h1 className="font-bruno-ace font-normal text-center text-[#13E425]" style={{ fontSize: '128px', lineHeight: '128px', textShadow: '0px 0px 24px #13E425' }} >
             Start Explore
           </h1>
         </div>
       ) : (
-        <>
-          {displayPath.map((card, index) => {
-            const depth = displayPath.length - 1 - index;
-            const isCurrent = depth === 0;
-            // [FIX] This flag now correctly identifies the card that is the target of the animation.
-            const isAnimatingIn = animationState.type === 'animating-in' && animationState.cardId === card.id;
+        cardsToRender.map(ac => {
+            const isTopCard = ac.id === currentCardId && animatedCards.length === 0;
+            const isHovered = !isTopCard && ac.id === hoveredCardId;
 
-            let style: React.CSSProperties = {
-              width: currentCardWidth,
-              height: currentCardHeight,
-            };
+            // Start with the base style
+            let finalStyle = { ...ac.style };
 
-            if (isCurrent) {
-              style.zIndex = MAX_PARENTS_TO_DISPLAY + 2;
-              style.left = centerX;
-              style.top = centerY;
-
-              // [KEY LOGIC FIX]
-              if (isAnimatingIn) {
-                // STATE 1: On the first render of a new card, place it at the START position
-                // and crucially, DISABLE transitions so it appears there instantly and invisibly.
-                style.transform = 'translate(-50%, -150%) scale(1.2)';
-                style.opacity = 0;
-                style.transition = 'none'; // <-- The critical fix!
-              } else {
-                // STATE 2: For a stable card OR a card that is now animating,
-                // set its target position and turn transitions ON.
-                style.transform = 'translate(-50%, -50%) scale(1)';
-                style.opacity = 1;
-                style.transition = 'all 0.5s ease-in-out';
-              }
-            } else {
-              // Parent card styling (unchanged, but now benefits from clear state logic)
-              const { x, y } = calculateCardPosition(depth, centerX, centerY, availableHeight);
-              const scale = 0.96 - ((depth - 1) * 0.04);
-              const blur = depth * 0.5;
-              const brightness = Math.max(0.8, 1 - (depth * 0.05));
-              const rotation = -5 * depth;
-
-              style.left = x;
-              style.top = y;
-              style.transform = `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale})`;
-              style.filter = `blur(${blur}px) brightness(${brightness})`;
-              style.opacity = 0.8;
-              style.zIndex = MAX_PARENTS_TO_DISPLAY + 1 - depth;
-              style.transition = 'all 0.5s ease-in-out';
+            // If the card is a parent card and is being hovered, apply hover styles
+            if (isHovered) {
+                const baseScaleMatch = /scale\((.*?)\)/.exec(ac.style.transform as string);
+                const baseScale = baseScaleMatch ? parseFloat(baseScaleMatch[1]) : 1;
+                
+                finalStyle = {
+                    ...finalStyle,
+                    // Apply hover styles: increase size, make fully visible and clear
+                    transform: (ac.style.transform as string).replace(/scale\(.*?\)/, `scale(${baseScale * 1.02})`),
+                    filter: 'blur(0px) brightness(1)',
+                    opacity: 1
+                };
             }
 
             return (
-              <div
-                key={card.id}
-                className="absolute"
-                style={style}
-                ref={isCurrent ? currentCardRef : undefined}
-              >
-                {isCurrent ? (
-                  <CurrentCardDialog
-                    card={card}
-                    cardRef={currentCardRef}
-                    onDelete={handleDelete}
-                    onCreateNew={handleCreateNew}
-                    onTextSelection={handleTextSelection}
-                    onCreateFromSelection={handleCreateFromSelection}
-                    onTermClick={handleTermClick}
-                  />
-                ) : (
-                  <ParentCard
-                    card={card}
-                    onClick={() => handleParentCardClick(card.id)}
-                  />
-                )}
+              // The pointer-events logic from the previous fix is still necessary and correct
+              <div key={ac.id} className={`card-container ${ac.status}`} style={{ ...finalStyle, pointerEvents: isTopCard ? 'auto' : 'none' }}>
+                <div style={{ pointerEvents: 'auto', width: '100%', height: '100%' }}>
+                  {isTopCard || ac.status === 'entering' || ac.status === 'stable-moving' ? (
+                    <CurrentCardDialog
+                      card={ac.card}
+                      cardRef={isTopCard ? currentCardRef : undefined}
+                      onDelete={() => handleDelete(ac.id)}
+                      onCreateNew={() => handleCreateCard([], ac.id)}
+                      onTextSelection={setSelectedContent}
+                      onCreateFromSelection={handleCreateFromSelection}
+                      onTermClick={handleTermClick}
+                    />
+                  ) : (
+                    <ParentCard 
+                      card={ac.card} 
+                      onClick={() => setCurrentCard(ac.id)}
+                      // Pass the state setters to the ParentCard
+                      onHoverStart={() => setHoveredCardId(ac.id)}
+                      onHoverEnd={() => setHoveredCardId(null)}
+                    />
+                  )}
+                </div>
               </div>
             );
-          })}
-
-          {/* ... (exitingCard and portal rendering remain unchanged) ... */}
-          {exitingCard && (() => {
-            const { card, depth } = exitingCard;
-            const { x, y } = calculateCardPosition(depth, centerX, centerY, availableHeight);
-            const scale = 0.96 - ((depth - 1) * 0.04);
-            const rotation = -5 * depth;
-            const finalTransform = `translate(-50%, -50%) rotate(${rotation}deg) scale(${scale})`;
-
-            return (
-              <div
-                className="absolute card-exiting"
-                style={{
-                  '--transform-end-exit': finalTransform,
-                  width: currentCardWidth,
-                  height: currentCardHeight,
-                  left: x,
-                  top: y,
-                  transform: finalTransform,
-                  filter: `blur(${depth * 0.5}px) brightness(${Math.max(0.8, 1 - (depth * 0.05))})`,
-                  opacity: 0.8,
-                  zIndex: 0,
-                } as React.CSSProperties}
-              >
-                <ParentCard card={card} onClick={() => {}} />
-              </div>
-            );
-          })()}
-          
-          {previewState.visible && portalRoot && ReactDOM.createPortal(
-            <PreviewCard
-              position={{ top: previewState.top, left: previewState.left }}
-              content={previewState.content}
-              isLoading={previewState.isLoading}
-              onClose={handlePreviewClose}
-              onCreate={handlePreviewCreate}
-              parentRef={currentCardRef}
-            />,
-            portalRoot
-          )}
-        </>
+        })
+      )}
+      
+      {previewState.visible && portalRoot && ReactDOM.createPortal(
+        <PreviewCard
+          position={{ top: previewState.top, left: previewState.left }}
+          content={previewState.content}
+          isLoading={previewState.isLoading}
+          onClose={() => setPreviewState(p => ({...p, visible: false}))}
+          onCreate={handleCreateFromPreview}
+          parentRef={currentCardRef}
+        />,
+        portalRoot
       )}
     </div>
   );
