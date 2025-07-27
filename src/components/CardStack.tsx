@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import useCardStore, { CardData, CardMessage } from '../stores/cardStore';
-import { X, ZoomIn, FileText, Loader } from 'lucide-react';
+import { X, ZoomIn, Loader } from 'lucide-react';
 import { useProjectStore } from '../stores/projectStore';
 import ReactMarkdown, { Components, ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
