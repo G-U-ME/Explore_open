@@ -101,17 +101,20 @@ const calculateTreeLayout = (cards: CardData[], viewportHeight: number, containe
   const positions = new Map<string, { x: number, y: number }>()
   const layerHeight = 80
   const horizontalPadding = 40
-  const nodesForSpacingCalculation = 7
+  // As per requirement, max 7 nodes horizontally. This defines the base spacing unit.
+  const nodesForSpacingCalculation = 7 
   
   const effectiveContainerWidth = containerWidth > 0 ? containerWidth : 300; 
-  const fixedSpacing = (effectiveContainerWidth - horizontalPadding * 2) / (nodesForSpacingCalculation - 1);
+
+  const horizontalSpacing = (effectiveContainerWidth - horizontalPadding * 2) / (nodesForSpacingCalculation - 1);
 
   let maxLayerContentWidth = 0
   layers.forEach(layer => {
-    if (layer.length <= 1) return
-    const currentLayerWidth = (layer.length - 1) * fixedSpacing;
-    maxLayerContentWidth = Math.max(maxLayerContentWidth, currentLayerWidth)
-  })
+    if (layer.length > 1) {
+      const currentLayerWidth = (layer.length - 1) * horizontalSpacing;
+      maxLayerContentWidth = Math.max(maxLayerContentWidth, currentLayerWidth);
+    }
+  });
 
   const svgWidth = Math.max(effectiveContainerWidth, maxLayerContentWidth + (horizontalPadding * 2))
   const verticalPadding = viewportHeight;
@@ -121,16 +124,12 @@ const calculateTreeLayout = (cards: CardData[], viewportHeight: number, containe
   layers.forEach((layer, depth) => {
     const y = svgHeight - (depth * layerHeight + verticalPadding)
     if (layer.length === 0) return
-
-    if (layer.length === 1) {
-        positions.set(layer[0].id, { x: svgWidth / 2, y })
-        return
-    }
     
-    const layerContentWidth = (layer.length - 1) * fixedSpacing;
+    const layerContentWidth = (layer.length - 1) * horizontalSpacing;
     const startX = (svgWidth - layerContentWidth) / 2
+    
     layer.forEach((card, index) => {
-        const x = startX + index * fixedSpacing
+        const x = startX + index * horizontalSpacing
         positions.set(card.id, { x, y })
     })
   })
@@ -196,36 +195,34 @@ export const TreeNavigation: React.FC = () => {
   const handleCardHover = (show: boolean, card: CardData) => setHoveredCard(show ? card : null)
 
   return (
-    <div className="h-full relative bg-transparent z-10">
+    // 1. Outer container: Defines the viewport boundary and is the anchor for the mask.
+    <div className="h-full relative bg-transparent z-10 min-w-0 overflow-hidden">
+      
+      {/* 2. Inner scroller: This div handles the actual scrolling. */}
       <div 
         ref={containerRef}
-        className="h-full w-full overflow-auto"
+        className="h-full overflow-y-auto overflow-x-auto" // Use h-full, not absolute
         onScroll={handleScroll}
       >
         <svg
           width={svgWidth}
           height={svgHeight}
-          className="relative z-10"
+          // The SVG is now a direct child of the scroller, no extra wrappers needed.
+          // The z-index is lower than the mask's.
+          className="relative z-10" 
         >
+          {/* SVG content for lines */}
           {cards.map(parent => {
             if (!parent.children || parent.children.length === 0) return null
             const parentPos = positions.get(parent.id)
             if (!parentPos) return null
 
-            // --- 修改开始 ---
-            // 无论有多少个子节点，都为每个子节点绘制一条独立的S形曲线
             return (
               <g key={`group-lines-from-${parent.id}`}>
                 {parent.children.map(childId => {
                   const childPos = positions.get(childId)
                   if (!childPos) return null
 
-                  // 使用三次贝塞尔曲线 (C) 绘制平滑的 "S" 形连接线
-                  // M = MoveTo: 移动到起点 (父节点底部)
-                  // C = Cubic Bezier: 
-                  // 第一个控制点 (parentPos.x, parentPos.y - layerHeight / 2) 使曲线垂直向下离开父节点
-                  // 第二个控制点 (childPos.x, childPos.y + layerHeight / 2) 使曲线垂直向上进入子节点
-                  // 终点是子节点的顶部
                   const d = `M ${parentPos.x} ${parentPos.y - radius} C ${parentPos.x} ${parentPos.y - layerHeight / 2} ${childPos.x} ${childPos.y + layerHeight / 2} ${childPos.x} ${childPos.y + radius}`
                   
                   return (
@@ -240,9 +237,9 @@ export const TreeNavigation: React.FC = () => {
                 })}
               </g>
             )
-            // --- 修改结束 ---
           })}
 
+          {/* SVG content for nodes */}
           {cards.map(card => {
             const pos = positions.get(card.id)
             if (!pos) return null
@@ -251,13 +248,17 @@ export const TreeNavigation: React.FC = () => {
         </svg>
       </div>
 
-      <div className="absolute inset-0 pointer-events-none z-20">
+      {/* 3. The mask: A sibling to the scroller, positioned absolutely over the outer container. */}
+      <div 
+        className="absolute inset-0 pointer-events-none z-20"
+      >
         <div 
-          className="absolute left-0 right-0 h-full"
+          className="h-full"
           style={{ background: 'linear-gradient(180deg, #101010 0%, rgba(16, 16, 16, 0.7) 30%, rgba(16, 16, 16, 0.25) 40%, rgba(16, 16, 16, 0) 50%, rgba(16, 16, 16, 0.25) 60%, rgba(16, 16, 16, 0.7) 70%, #101010 100%)' }}
         />
       </div>
 
+      {/* The hover info box remains outside and on top, which is correct */}
       {hoveredCard && (
         <div className="absolute bottom-2 left-2 right-2 bg-[#4C4C4C] rounded-md p-2 text-white text-xs z-30">
           <div className="font-medium mb-0.5">{hoveredCard.title || '无标题卡片'}</div>
