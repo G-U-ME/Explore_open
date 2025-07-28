@@ -541,17 +541,6 @@ const useAnimation = (
         [...fromPath, ...toPath].forEach(c => allCardsData.set(c.id, c));
         const allIds = Array.from(allCardsData.keys());
 
-        // NEW: Calculate the total duration of the exit phase, if one exists.
-        let exitPhaseDuration = 0;
-        const numSteps = fromPath.length - toPath.length;
-        if (numSteps > 0) { // This is a "shrink" or "retreat" animation where cards exit.
-            const exitingCardCount = numSteps;
-            // The last card to start exiting determines the maximum delay within the exit phase.
-            const maxExitStaggerDelay = Math.max(0, (exitingCardCount - 1) * STAGGER_DELAY_MS);
-            // The total phase duration is that max delay PLUS the animation time itself.
-            exitPhaseDuration = maxExitStaggerDelay;
-        }
-
         const cardStates = allIds.map(id => {
             const cardData = allCardsData.get(id)!;
             const oldIdx = fromPath.findIndex(c => c.id === id);
@@ -569,30 +558,65 @@ const useAnimation = (
             let initialTransform = `translate(-50%, -50%) rotate(${initialPos.rotation}deg) scale(${initialPos.scale})`;
             let delay = '0ms';
             
-            if (isEntering) {
-                status = 'entering';
-                const baseDelay = toPath.length > fromPath.length ? fromPath.length : 0;
-                delay = `${(newIdx - baseDelay) * STAGGER_DELAY_MS}ms`;
-                initialTransform = `translate(-40%, -55%) scale(1.2) rotate(5deg)`;
-            } else if (isExiting) {
-                status = 'exiting-fly-up-right';
-                // Delay for exiting cards is relative to the start of the exit phase (time = 0)
-                // The topmost card to exit has oldDepth = numSteps-1, second has numSteps-2, etc.
-                const exitRank = oldDepth;
-                delay = `${exitRank * STAGGER_DELAY_MS}ms`;
-            } else { // This is for cards that remain on screen and move
-                let moveStaggerDelay = 0;
-                if (numSteps > 0) { // Only for "shrink" animations, calculate the internal stagger
-                    // The card that was closest to the front (highest oldIdx) moves first.
+            // Explicitly use the 'type' parameter to determine animation logic
+            if (type === 'SWITCH_TO_PARENT') {
+                const exitingCardCount = fromPath.length - toPath.length;
+                const maxExitStaggerDelay = Math.max(0, (exitingCardCount - 1) * STAGGER_DELAY_MS);
+                
+                if (isExiting) {
+                    status = 'exiting-fly-up-right';
+                    // The front-most exiting card (oldDepth=0) goes first (delay=0), peeling off sequentially.
+                    const exitRank = oldDepth;
+                    delay = `${exitRank * STAGGER_DELAY_MS}ms`;
+                } else { // This is a moving card
+                    // It should wait for the exiting cards to finish their stagger, then start its own stagger.
                     const lastRemainingCardOldIdx = toPath.length - 1;
                     const delaySteps = lastRemainingCardOldIdx - oldIdx;
-                    moveStaggerDelay = delaySteps * STAGGER_DELAY_MS;
+                    const moveStaggerDelay = delaySteps * STAGGER_DELAY_MS;
+                    delay = `${maxExitStaggerDelay + moveStaggerDelay}ms`;
                 }
-                // THE FIX: The total delay for moving cards is the entire exit phase duration
-                // PLUS their own internal stagger delay.
-                delay = `${exitPhaseDuration + moveStaggerDelay}ms`;
-            }
+            } else if (type === 'SWITCH_TO_CHILD') {
+                if (isEntering) {
+                    status = 'entering';
+                    // New cards fly in one by one.
+                    const enterRank = newIdx - fromPath.length; // 0 for the first new card, 1 for the second...
+                    delay = `${enterRank * STAGGER_DELAY_MS}ms`;
+                    initialTransform = `translate(-40%, -55%) scale(1.2) rotate(5deg)`;
+                } else { // This is a moving card
+                    // Existing cards move back simultaneously as the new ones start entering.
+                    delay = '0ms'; 
+                }
+            } else {
+                // Fallback to the original generic logic for unhandled or complex cases (e.g., SWITCH_SIBLING).
+                // This logic is robust and can handle both advancing and retreating stacks.
+                const numSteps = fromPath.length - toPath.length;
+                let exitPhaseDuration = 0;
+                if (numSteps > 0) {
+                    const exitingCardCount = numSteps;
+                    const maxExitStaggerDelay = Math.max(0, (exitingCardCount - 1) * STAGGER_DELAY_MS);
+                    exitPhaseDuration = maxExitStaggerDelay;
+                }
 
+                if (isEntering) {
+                    status = 'entering';
+                    const baseDelay = toPath.length > fromPath.length ? fromPath.length : 0;
+                    delay = `${(newIdx - baseDelay) * STAGGER_DELAY_MS}ms`;
+                    initialTransform = `translate(-40%, -55%) scale(1.2) rotate(5deg)`;
+                } else if (isExiting) {
+                    status = 'exiting-fly-up-right';
+                    const exitRank = oldDepth;
+                    delay = `${exitRank * STAGGER_DELAY_MS}ms`;
+                } else { // This is for cards that remain on screen and move
+                    let moveStaggerDelay = 0;
+                    if (numSteps > 0) {
+                        const lastRemainingCardOldIdx = toPath.length - 1;
+                        const delaySteps = lastRemainingCardOldIdx - oldIdx;
+                        moveStaggerDelay = delaySteps * STAGGER_DELAY_MS;
+                    }
+                    delay = `${exitPhaseDuration + moveStaggerDelay}ms`;
+                }
+            }
+            
             const initialStyle: React.CSSProperties = {
                 width: dimensions.cardWidth, height: dimensions.cardHeight,
                 left: initialPos.x, top: initialPos.y,
@@ -600,7 +624,6 @@ const useAnimation = (
                 filter: `blur(${initialPos.blur}px) brightness(${initialPos.brightness})`,
                 opacity: isEntering ? 0 : initialPos.opacity,
                 zIndex: 25 - (isEntering ? newDepth : oldDepth),
-                // Use animation-delay for keyframe animations, transition-delay for property transitions
                 transitionDelay: (status === 'entering' || status === 'stable-moving') ? delay : undefined,
                 animationDelay: (status.startsWith('exiting-')) ? delay : undefined,
             };
