@@ -19,17 +19,19 @@ import rehypeRaw from 'rehype-raw';
 // ================================================================================================
 
 const ANIMATION_DURATION = 350; // ms, used for both JS timeouts and CSS transitions
+const STAGGER_DELAY_MS = 50; // ms, used for the "old" animation style
 
-type AnimationStatus = 
-  | 'stable' 
+type AnimationStatus =
+  | 'stable'
   | 'stable-moving'
-  | 'entering' // Generic entering state, handled by JS
+  | 'entering' // Generic entering for old animation style
+  | 'entering-from-top' // Specific for new animation style
+  | 'entering-from-left' // Specific for new animation style
   | 'exiting-dissolve'
   | 'exiting-fly-right'
   | 'exiting-fly-up-right'
   | 'exiting-shrink-out';
 
-// NEW: A hint for the animation system about the user's action
 type NavigationAction = 'create' | 'delete' | null;
 
 interface AnimatedCard {
@@ -38,6 +40,15 @@ interface AnimatedCard {
   status: AnimationStatus;
   style: React.CSSProperties;
 }
+
+type Dimensions = {
+    centerX: number;
+    centerY: number;
+    availableHeight: number;
+    cardWidth: number;
+    cardHeight: number;
+};
+
 
 function normalizeMathDelimiters(content: string): string {
   let normalized = content.replace(/\\\[(.*?)\\\]/gs, '$$$$$1$$$$');
@@ -62,27 +73,30 @@ const calculateCardPosition = (
     if (depth === 0) {
         return { x: centerX, y: centerY, scale: 1, rotation: 0, blur: 0, brightness: 1, opacity: 1 };
     }
+    if (depth > 24) {
+        return { x: centerX, y: centerY + availableHeight, scale: 0, rotation: -90, blur: 20, brightness: 0.5, opacity: 0 };
+    }
     if (availableHeight <= centerY || availableHeight < 100) {
         return { x: centerX, y: centerY, scale: 0, rotation: 0, blur: 20, brightness: 0.5, opacity: 0 };
     }
 
     const ANGLE_STEP_DEG = 5;
-    const SCALE_STEP = 0.04; 
+    const SCALE_STEP = 0.04;
     const BLUR_STEP_PX = 0.5;
     const BRIGHTNESS_STEP = 0.05;
 
     const chordLength = availableHeight/2;
-    const radius = chordLength/2; 
+    const radius = chordLength/2;
     const circleCenterY = centerY + radius;
     const circleCenterX = centerX;
 
     const startAngleRad = Math.PI/2;
     const angleStepRad = (ANGLE_STEP_DEG * Math.PI) / 180;
     const cardAngleRad = startAngleRad + (depth * angleStepRad);
-    
+
     const x = circleCenterX + radius * Math.cos(cardAngleRad);
-    const y = circleCenterY - radius * Math.sin(cardAngleRad); 
-    
+    const y = circleCenterY - radius * Math.sin(cardAngleRad);
+
     return {
         x, y,
         scale: Math.max(0, 1.0 - (depth * SCALE_STEP)),
@@ -100,13 +114,22 @@ const findCommonAncestorId = (path1: CardData[], path2: CardData[]): string | nu
     }
     return null;
 };
+
+const getFullCardStyle = (depth: number, dimensions: Dimensions) => {
+  const pos = calculateCardPosition(depth, dimensions.centerX, dimensions.centerY, dimensions.availableHeight);
+  return {
+      width: dimensions.cardWidth, height: dimensions.cardHeight,
+      left: pos.x, top: pos.y, zIndex: 25 - depth,
+      transform: `translate(-50%, -50%) rotate(${pos.rotation}deg) scale(${pos.scale})`,
+      filter: `blur(${pos.blur}px) brightness(${pos.brightness})`,
+      opacity: pos.opacity,
+  };
+};
 // #endregion
 
 // ================================================================================================
 // #region Markdown and Rendering Components
 // ================================================================================================
-
-// ... (Components like MarkdownRenderer, PreviewCard, CurrentCardDialog, ParentCard remain unchanged)
 const remarkConceptualTerm = () => {
   return (tree: Node) => {
     visit(tree, 'text', (node: Literal, index: number | undefined, parent: Parent | undefined) => {
@@ -333,11 +356,11 @@ const ParentCard: React.FC<{
     <div
       className="absolute top-0 left-0 w-full h-full cursor-pointer transition-all duration-300 ease-in-out bg-[#222222] rounded-[24px] shadow-card"
       onClick={() => {
-        onHoverEnd(); // 立即清除悬浮状态
-        onClick();    // 然后执行卡片切换
+        onHoverEnd();
+        onClick();
       }}
-      onMouseEnter={onHoverStart} // Report that hover has started
-      onMouseLeave={onHoverEnd}   // Report that hover has ended
+      onMouseEnter={onHoverStart}
+      onMouseLeave={onHoverEnd}
     >
       <div className="p-4 h-full flex flex-col text-white overflow-hidden pointer-events-none">
         <div className="font-normal text-title leading-9 mb-2 pb-1 border-b border-[#333] truncate">
@@ -372,178 +395,329 @@ const ParentCard: React.FC<{
 // #endregion
 
 // ================================================================================================
-// #region Animation Hook (REWRITTEN TO FIX ANIMATION JUMP)
+// #region Combined Animation Hook
 // ================================================================================================
-
 
 const useAnimation = (
     currentCardId: string | null,
     getCardPath: (id: string) => CardData[],
-    dimensions: { centerX: number; centerY: number; availableHeight: number; cardWidth: number, cardHeight: number },
-    setCurrentCard: (id: string | null) => void,
+    dimensions: Dimensions,
     navigationAction: React.MutableRefObject<NavigationAction>
 ) => {
-    // NEW: Stagger delay for sequential animations (in milliseconds)
-    const STAGGER_DELAY_MS = 50;
-
     const [animatingCards, setAnimatingCards] = useState<AnimatedCard[]>([]);
     const [isAnimating, setIsAnimating] = useState(false);
-    const [pendingFinalTarget, setPendingFinalTarget] = useState<string | null>(null);
     const prevCardId = usePrevious(currentCardId);
+    const animationSleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-    useEffect(() => {
-        if (!isAnimating && pendingFinalTarget) {
-            const target = pendingFinalTarget;
-            setPendingFinalTarget(null);
-            setCurrentCard(target);
+    const runNewStyleAnimation = useCallback(async (
+        oldPath: CardData[], 
+        newPath: CardData[],
+        animationType: string
+    ) => {
+        try {
+            if (animationType === 'SWITCH_TO_PARENT') {
+                const cardsToRemoveInOrder = oldPath.slice(newPath.length).reverse();
+                let currentAnimatingCards = oldPath.map((card, index) => ({
+                    id: card.id, card, status: 'stable-moving' as AnimationStatus,
+                    style: getFullCardStyle(oldPath.length - 1 - index, dimensions),
+                }));
+                setAnimatingCards(currentAnimatingCards);
+                await animationSleep(20);
+
+                let currentVisiblePath = oldPath;
+                for (const cardToRemove of cardsToRemoveInOrder) {
+                    const nextVisiblePath = currentVisiblePath.filter(c => c.id !== cardToRemove.id);
+                    setAnimatingCards(current => current.map(ac => {
+                        if (ac.id === cardToRemove.id) return { ...ac, status: 'exiting-fly-up-right' as AnimationStatus };
+                        const newIdx = nextVisiblePath.findIndex(c => c.id === ac.id);
+                        if (newIdx !== -1) {
+                            const newDepth = nextVisiblePath.length - 1 - newIdx;
+                            return { ...ac, style: getFullCardStyle(newDepth, dimensions) };
+                        }
+                        return ac;
+                    }));
+                    await animationSleep(ANIMATION_DURATION);
+                    currentVisiblePath = nextVisiblePath;
+                }
+            } else if (animationType === 'CREATE_CHILD') {
+                 const initialAnimatingCards = oldPath.map((card, index) => ({
+                    id: card.id, card, status: 'stable-moving' as AnimationStatus,
+                    style: getFullCardStyle(oldPath.length - 1 - index, dimensions),
+                }));
+                
+                const enteringCardState: AnimatedCard = {
+                   id: newPath[newPath.length-1].id, card: newPath[newPath.length-1], status: 'entering-from-top',
+                   style: {
+                       ...getFullCardStyle(0, dimensions),
+                       transform: `translate(-50%, -150%) scale(1.2)`,
+                       filter: 'blur(0px) brightness(1)', opacity: 0, zIndex: 26,
+                   }
+                };
+                
+                setAnimatingCards([...initialAnimatingCards, enteringCardState]);
+                await animationSleep(20);
+
+                const finalStates = newPath.map(card => {
+                    const depth = newPath.length - 1 - newPath.findIndex(p => p.id === card.id);
+                    return { id: card.id, card, status: 'stable-moving' as AnimationStatus, style: getFullCardStyle(depth, dimensions) };
+                });
+                setAnimatingCards(finalStates);
+                await animationSleep(ANIMATION_DURATION);
+            } else if (animationType === 'SWITCH_TO_CHILD') {
+                const cardsToEnter = newPath.slice(oldPath.length);
+                let currentVisiblePath = oldPath;
+                let currentAnimatingCards = oldPath.map((card, index) => ({
+                    id: card.id, card, status: 'stable-moving' as AnimationStatus,
+                    style: getFullCardStyle(currentVisiblePath.length - 1 - index, dimensions),
+                }));
+                setAnimatingCards(currentAnimatingCards);
+                await animationSleep(20);
+
+                for (const cardToEnter of cardsToEnter) {
+                    const nextPath = [...currentVisiblePath, cardToEnter];
+                    const enteringCardState: AnimatedCard = {
+                       id: cardToEnter.id, card: cardToEnter, status: 'stable-moving',
+                       style: {
+                           ...getFullCardStyle(0, dimensions),
+                           transform: `translate(-40%, -55%) scale(1.04) rotate(5deg)`,
+                           filter: 'blur(0px) brightness(1)', opacity: 0, zIndex: 26,
+                       }
+                    };
+                    setAnimatingCards(current => [...current, enteringCardState]);
+                    await animationSleep(20);
+
+                    const stepTargetStates = nextPath.map(card => {
+                        const depth = nextPath.length - 1 - nextPath.findIndex(p => p.id === card.id);
+                        return { id: card.id, card, status: 'stable-moving' as AnimationStatus, style: getFullCardStyle(depth, dimensions) };
+                    });
+                    setAnimatingCards(stepTargetStates);
+                    await animationSleep(ANIMATION_DURATION);
+                    currentVisiblePath = nextPath;
+                }
+            } else if (animationType === 'SWITCH_SIBLING') {
+                const parentPath = oldPath.slice(0, -1);
+                const initialStates: AnimatedCard[] = parentPath.map((card, index) => {
+                     const depth = newPath.length - 1 - index;
+                     return { id: card.id, card, status: 'stable-moving', style: getFullCardStyle(depth, dimensions) };
+                });
+                
+                initialStates.push({ id: prevCardId!, card: oldPath[oldPath.length-1], status: 'stable-moving', style: getFullCardStyle(0, dimensions) });
+                
+                const newCard = newPath[newPath.length-1];
+                initialStates.push({
+                    id: newCard.id, card: newCard, status: 'entering-from-left',
+                    style: { ...getFullCardStyle(0, dimensions), transform: `translate(-150%, -50%) scale(1)`, opacity: 0 }
+                });
+                
+                setAnimatingCards(initialStates);
+                await animationSleep(20);
+
+                setAnimatingCards(current => current.map(ac => {
+                    if (ac.id === prevCardId) return { ...ac, status: 'exiting-fly-right' };
+                    if (ac.id === newCard.id) return { ...ac, style: getFullCardStyle(0, dimensions) };
+                    return ac; // Parents don't move
+                }));
+                await animationSleep(ANIMATION_DURATION);
+            
+            } else { // Generic case for others, e.g. delete, or unrelated without common ancestor
+                const finalStates = oldPath.map((card, index) => ({
+                    id: card.id, card, status: 'exiting-dissolve' as AnimationStatus,
+                    style: getFullCardStyle(oldPath.length - 1 - index, dimensions)
+                }));
+                setAnimatingCards(finalStates);
+                await animationSleep(ANIMATION_DURATION);
+            }
+        } finally {
+            // Cleanup happens in the main effect
         }
-    }, [isAnimating, pendingFinalTarget, setCurrentCard]);
+    }, [dimensions, getCardPath, prevCardId]);
 
+    const runOldStyleAnimation = useCallback((
+        fromPath: CardData[],
+        toPath: CardData[],
+        type: string
+    ) => {
+        const allCardsData = new Map<string, CardData>();
+        [...fromPath, ...toPath].forEach(c => allCardsData.set(c.id, c));
+        const allIds = Array.from(allCardsData.keys());
 
+        // NEW: Calculate the total duration of the exit phase, if one exists.
+        let exitPhaseDuration = 0;
+        const numSteps = fromPath.length - toPath.length;
+        if (numSteps > 0) { // This is a "shrink" or "retreat" animation where cards exit.
+            const exitingCardCount = numSteps;
+            // The last card to start exiting determines the maximum delay within the exit phase.
+            const maxExitStaggerDelay = Math.max(0, (exitingCardCount - 1) * STAGGER_DELAY_MS);
+            // The total phase duration is that max delay PLUS the animation time itself.
+            exitPhaseDuration = maxExitStaggerDelay;
+        }
+
+        const cardStates = allIds.map(id => {
+            const cardData = allCardsData.get(id)!;
+            const oldIdx = fromPath.findIndex(c => c.id === id);
+            const newIdx = toPath.findIndex(c => c.id === id);
+            const oldDepth = oldIdx !== -1 ? fromPath.length - 1 - oldIdx : -1;
+            const newDepth = newIdx !== -1 ? toPath.length - 1 - newIdx : -1;
+            
+            const isEntering = oldDepth === -1;
+            const isExiting = newDepth === -1;
+
+            const initialPos = calculateCardPosition(oldDepth, dimensions.centerX, dimensions.centerY, dimensions.availableHeight);
+            const finalPos = calculateCardPosition(newDepth, dimensions.centerX, dimensions.centerY, dimensions.availableHeight);
+
+            let status: AnimationStatus = 'stable-moving';
+            let initialTransform = `translate(-50%, -50%) rotate(${initialPos.rotation}deg) scale(${initialPos.scale})`;
+            let delay = '0ms';
+            
+            if (isEntering) {
+                status = 'entering';
+                const baseDelay = toPath.length > fromPath.length ? fromPath.length : 0;
+                delay = `${(newIdx - baseDelay) * STAGGER_DELAY_MS}ms`;
+                initialTransform = `translate(-40%, -55%) scale(1.2) rotate(5deg)`;
+            } else if (isExiting) {
+                status = 'exiting-fly-up-right';
+                // Delay for exiting cards is relative to the start of the exit phase (time = 0)
+                // The topmost card to exit has oldDepth = numSteps-1, second has numSteps-2, etc.
+                const exitRank = oldDepth;
+                delay = `${exitRank * STAGGER_DELAY_MS}ms`;
+            } else { // This is for cards that remain on screen and move
+                let moveStaggerDelay = 0;
+                if (numSteps > 0) { // Only for "shrink" animations, calculate the internal stagger
+                    // The card that was closest to the front (highest oldIdx) moves first.
+                    const lastRemainingCardOldIdx = toPath.length - 1;
+                    const delaySteps = lastRemainingCardOldIdx - oldIdx;
+                    moveStaggerDelay = delaySteps * STAGGER_DELAY_MS;
+                }
+                // THE FIX: The total delay for moving cards is the entire exit phase duration
+                // PLUS their own internal stagger delay.
+                delay = `${exitPhaseDuration + moveStaggerDelay}ms`;
+            }
+
+            const initialStyle: React.CSSProperties = {
+                width: dimensions.cardWidth, height: dimensions.cardHeight,
+                left: initialPos.x, top: initialPos.y,
+                transform: initialTransform,
+                filter: `blur(${initialPos.blur}px) brightness(${initialPos.brightness})`,
+                opacity: isEntering ? 0 : initialPos.opacity,
+                zIndex: 25 - (isEntering ? newDepth : oldDepth),
+                // Use animation-delay for keyframe animations, transition-delay for property transitions
+                transitionDelay: (status === 'entering' || status === 'stable-moving') ? delay : undefined,
+                animationDelay: (status.startsWith('exiting-')) ? delay : undefined,
+            };
+            const finalStyle: React.CSSProperties = { ...initialStyle, left: finalPos.x, top: finalPos.y, transform: `translate(-50%, -50%) rotate(${finalPos.rotation}deg) scale(${finalPos.scale})`, filter: `blur(${finalPos.blur}px) brightness(${finalPos.brightness})`, opacity: finalPos.opacity, zIndex: 25 - newDepth };
+            
+            return { id, card: cardData, status, initialStyle, finalStyle, isExiting };
+        });
+
+        setAnimatingCards(cardStates.map(s => ({ id: s.id, card: s.card, status: s.status, style: s.initialStyle })));
+        
+        setTimeout(() => {
+            setAnimatingCards(current => current.map(animatingCard => {
+                const state = cardStates.find(s => s.id === animatingCard.id);
+                if (!state) return animatingCard;
+                // For exiting cards, the status change triggers the animation. For others, the style change triggers the transition.
+                if (state.isExiting) return { ...animatingCard, status: state.status };
+                return { ...animatingCard, style: state.finalStyle, status: 'stable-moving' };
+            }));
+        }, 20);
+
+        const maxDelay = cardStates.reduce((max, s) => Math.max(max, parseInt(s.initialStyle.transitionDelay || '0') + parseInt(s.initialStyle.animationDelay || '0')), 0);
+        return ANIMATION_DURATION + maxDelay + 100;
+    }, [dimensions]);
+    
     useEffect(() => {
         if (isAnimating || currentCardId === prevCardId) {
             return;
         }
 
-        const oldPath = prevCardId ? getCardPath(prevCardId) : [];
-        const newPath = currentCardId ? getCardPath(currentCardId) : [];
-
-        let animationType = 'init';
-        if (oldPath.length > 0 && newPath.length > 0) {
-            const isPrefix = (shortPath: CardData[], longPath: CardData[]) => {
-                if (shortPath.length >= longPath.length) return false;
-                return shortPath.every((card, index) => card.id === longPath[index]?.id);
-            };
-
-            if (navigationAction.current === 'delete') {
-                animationType = 'DELETE';
-            } else if (isPrefix(oldPath, newPath)) {
-                animationType = navigationAction.current === 'create' ? 'CREATE_CHILD' : 'SWITCH_TO_CHILD';
-            } else if (isPrefix(newPath, oldPath)) {
-                animationType = 'SWITCH_TO_PARENT';
-            } else if (oldPath[oldPath.length-1].parentId === newPath[newPath.length-1].parentId) {
-                animationType = 'SWITCH_SIBLING';
-            } else {
-                animationType = 'SWITCH_UNRELATED';
-            }
-        } else if (newPath.length > 0) {
-            animationType = 'CREATE_CHILD';
+        if (!prevCardId && currentCardId) {
+            (async () => {
+                const newPath = getCardPath(currentCardId);
+                const initialCards = newPath.map((card, index) => ({ id: card.id, card, status: 'stable' as AnimationStatus, style: { ...getFullCardStyle(newPath.length - 1 - index, dimensions), opacity: 0 } }));
+                setIsAnimating(true);
+                setAnimatingCards(initialCards);
+                await animationSleep(20);
+                setAnimatingCards(current => current.map(c => {
+                    const depth = newPath.length - 1 - newPath.findIndex(p => p.id === c.id);
+                    return {...c, style: {...c.style, opacity: getFullCardStyle(depth, dimensions).opacity}};
+                }));
+                await animationSleep(ANIMATION_DURATION);
+                setIsAnimating(false);
+                setAnimatingCards([]);
+            })();
+            return;
         }
-        
-        if (animationType === 'SWITCH_UNRELATED') {
-            const commonAncestorId = findCommonAncestorId(oldPath, newPath);
-            if (commonAncestorId && commonAncestorId !== currentCardId) {
-                setPendingFinalTarget(currentCardId);
-                setCurrentCard(commonAncestorId);
-                return;
-            }
+
+        if (!prevCardId || !currentCardId) {
+            return;
         }
+
+        const oldPath = getCardPath(prevCardId);
+        const newPath = getCardPath(currentCardId);
+        const isPrefix = (shortPath: CardData[], longPath: CardData[]) => shortPath.length < longPath.length && shortPath.every((card, index) => card.id === longPath[index]?.id);
+
+        let animationType: string;
+        if (navigationAction.current === 'delete') animationType = 'DELETE';
+        else if (navigationAction.current === 'create') animationType = 'CREATE_CHILD';
+        else if (isPrefix(oldPath, newPath)) animationType = 'SWITCH_TO_CHILD';
+        else if (isPrefix(newPath, oldPath)) animationType = 'SWITCH_TO_PARENT';
+        else if (oldPath.length > 0 && newPath.length > 0 && oldPath[oldPath.length - 1].parentId === newPath[newPath.length - 1].parentId) animationType = 'SWITCH_SIBLING';
+        else animationType = 'SWITCH_UNRELATED';
         
-        const runAnimation = (fromPath: CardData[], toPath: CardData[], type: string) => {
+        navigationAction.current = null;
+        
+        const runAnimation = async () => {
             setIsAnimating(true);
-            const allCardsData = new Map<string, CardData>();
-            [...fromPath, ...toPath].forEach(c => allCardsData.set(c.id, c));
-            const allIds = Array.from(allCardsData.keys());
+            try {
+                if (animationType === 'SWITCH_UNRELATED') {
+                    const commonAncestorId = findCommonAncestorId(oldPath, newPath);
+                    const ancestorPath = commonAncestorId ? getCardPath(commonAncestorId) : [];
+                    const distance = commonAncestorId ? (oldPath.length - ancestorPath.length) + (newPath.length - ancestorPath.length) : 99;
 
-            const cardStates = allIds.map(id => {
-                const cardData = allCardsData.get(id)!;
-                const oldIdx = fromPath.findIndex(c => c.id === id);
-                const newIdx = toPath.findIndex(c => c.id === id);
-                const oldDepth = oldIdx !== -1 ? fromPath.length - 1 - oldIdx : -1;
-                const newDepth = newIdx !== -1 ? toPath.length - 1 - newIdx : -1;
-                
-                const isEntering = oldDepth === -1;
-                const isExiting = newDepth === -1;
+                    if (!commonAncestorId) {
+                        // No common ground, just dissolve everything from old path.
+                        await runNewStyleAnimation(oldPath, [], 'DELETE');
+                    } else {
+                        // Two-phase animation: 1. Retreat to ancestor, 2. Advance to target.
+                        const useOldStyle = distance > 3;
 
-                const initialPos = calculateCardPosition(oldDepth, dimensions.centerX, dimensions.centerY, dimensions.availableHeight);
-                const finalPos = calculateCardPosition(newDepth, dimensions.centerX, dimensions.centerY, dimensions.availableHeight);
+                        // Phase 1: Retreat from oldPath to ancestorPath
+                        if (useOldStyle) {
+                            const duration = runOldStyleAnimation(oldPath, ancestorPath, 'SWITCH_TO_PARENT');
+                            await animationSleep(duration);
+                        } else {
+                            await runNewStyleAnimation(oldPath, ancestorPath, 'SWITCH_TO_PARENT');
+                        }
 
-                let status: AnimationStatus = 'stable-moving';
-                let initialTransform = `translate(-50%, -50%) rotate(${initialPos.rotation}deg) scale(${initialPos.scale})`;
-                let delay = '0ms';
-                
-                if (isEntering) {
-                    status = 'entering';
-                    if ((type === 'SWITCH_TO_CHILD' || type === 'CREATE_CHILD') && toPath.length - fromPath.length > 0) {
-                        const baseDelay = (type === 'CREATE_CHILD' ? 0 : 50);
-                        delay = `${baseDelay + (newIdx - fromPath.length) * STAGGER_DELAY_MS}ms`;
-                    }
-
-                    if (type === 'CREATE_CHILD') { 
-                        initialTransform = `translate(-50%, -150%) scale(1.2) rotate(0deg)`;
-                    } else if (type === 'SWITCH_TO_CHILD') {
-                        initialTransform = `translate(-40%, -55%) scale(1.2) rotate(5deg)`;
-                    } else if (type === 'SWITCH_SIBLING') { 
-                        initialTransform = `translate(-150%, -50%) scale(1) rotate(0deg)`;
-                    }
-                } else if (isExiting) {
-                     if (type === 'DELETE' && oldDepth === 0) status = 'exiting-dissolve';
-                    else if (type === 'SWITCH_TO_PARENT') {
-                        status = 'exiting-fly-up-right';
-                        if (fromPath.length - toPath.length > 0) {
-                           delay = `${oldDepth * STAGGER_DELAY_MS}ms`;
+                        // Phase 2: Advance from ancestorPath to newPath
+                        if (useOldStyle) {
+                            const duration = runOldStyleAnimation(ancestorPath, newPath, 'SWITCH_TO_CHILD');
+                            await animationSleep(duration);
+                        } else {
+                            await runNewStyleAnimation(ancestorPath, newPath, 'SWITCH_TO_CHILD');
                         }
                     }
-                    else if (type === 'SWITCH_SIBLING' && oldDepth === 0) status = 'exiting-fly-right';
-                    else if (type === 'CREATE_CHILD' && fromPath.length >= 24) status = 'exiting-shrink-out';
-                    else status = 'exiting-dissolve';
-                } 
-                else if (type === 'SWITCH_TO_PARENT' && !isExiting) {
-                    const numSteps = fromPath.length - toPath.length;
-                    if (numSteps > 0) {
-                        delay = `${(numSteps - 1) * STAGGER_DELAY_MS}ms`;
+                } else {
+                    // Handle all other one-phase animations
+                    const distance = Math.abs(newPath.length - oldPath.length);
+                    const useOldStyle = distance > 3 && animationType.startsWith('SWITCH');
+
+                    if (useOldStyle) {
+                        const totalDuration = runOldStyleAnimation(oldPath, newPath, animationType);
+                        await animationSleep(totalDuration);
+                    } else {
+                        await runNewStyleAnimation(oldPath, newPath, animationType);
                     }
                 }
-
-                const initialStyle: React.CSSProperties = {
-                    width: dimensions.cardWidth, height: dimensions.cardHeight,
-                    left: initialPos.x, top: initialPos.y,
-                    transform: initialTransform,
-                    filter: `blur(${initialPos.blur}px) brightness(${initialPos.brightness})`,
-                    opacity: isEntering ? 0 : initialPos.opacity,
-                    zIndex: 25 - (isEntering ? newDepth : oldDepth),
-                    transitionDelay: (status === 'entering' || status === 'stable-moving') ? delay : undefined,
-                    animationDelay: (status.startsWith('exiting-')) ? delay : undefined,
-                };
-
-                const finalStyle: React.CSSProperties = {
-                    ...initialStyle,
-                    left: finalPos.x, top: finalPos.y,
-                    transform: `translate(-50%, -50%) rotate(${finalPos.rotation}deg) scale(${finalPos.scale})`,
-                    filter: `blur(${finalPos.blur}px) brightness(${finalPos.brightness})`,
-                    opacity: finalPos.opacity,
-                    zIndex: 25 - newDepth,
-                };
-                
-                return { id, card: cardData, status, initialStyle, finalStyle, isExiting };
-            });
-
-            setAnimatingCards(cardStates.map(s => ({ id: s.id, card: s.card, status: s.status, style: s.initialStyle })));
-            
-            setTimeout(() => {
-                setAnimatingCards(current => current.map(animatingCard => {
-                    const state = cardStates.find(s => s.id === animatingCard.id);
-                    if (!state) return animatingCard;
-                    if (state.isExiting) {
-                        return { ...animatingCard, status: state.status };
-                    }
-                    return { ...animatingCard, style: state.finalStyle, status: 'stable-moving' };
-                }));
-            }, 20);
-
-            const maxDelay = cardStates.reduce((max, s) => Math.max(max, parseInt(s.initialStyle.transitionDelay || '0') + parseInt(s.initialStyle.animationDelay || '0')), 0);
-            const totalDuration = ANIMATION_DURATION + maxDelay;
-
-            setTimeout(() => {
-                setAnimatingCards([]);
+            } finally {
                 setIsAnimating(false);
-            }, totalDuration + 100);
+                setAnimatingCards([]);
+            }
         };
-        
-        runAnimation(oldPath, newPath, animationType);
-        if (navigationAction.current) navigationAction.current = null;
 
-    }, [currentCardId, getCardPath, dimensions, setCurrentCard, navigationAction]);
+        runAnimation();
+
+    }, [currentCardId, getCardPath, dimensions, navigationAction, isAnimating, prevCardId, runNewStyleAnimation, runOldStyleAnimation]);
 
     return animatingCards;
 };
@@ -559,28 +733,27 @@ export const CardStack: React.FC<{
   availableHeight: number;
   centerAreaWidth: number;
 }> = ({ centerY, availableHeight, centerAreaWidth }) => {
-  const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle } = useCardStore();
+  // MODIFICATION: Add `appendMessage` and `updateMessage` for streaming AI responses
+  const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle, appendMessage, updateMessage } = useCardStore();
   const { projects, activeProjectId } = useProjectStore();
   const { apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt } = useSettingsStore();
-  
-  // NEW: State to track the hovered card ID
+
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
 
   const activeProject = projects.find(p => p.id === activeProjectId);
   const cards = activeProject?.cards || [];
   const currentCardId = activeProject?.currentCardId || null;
   const currentCard = cards.find(c => c.id === currentCardId);
-  
-  const prevCardId = usePrevious(currentCardId);
 
   const lastMessageContent = currentCard?.messages?.[currentCard.messages.length - 1]?.content;
+  const prevCardId = usePrevious(currentCardId);
 
   const currentCardRef = useRef<HTMLDivElement>(null);
   const navigationAction = useRef<NavigationAction>(null);
   const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: '' });
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
 
-  const dimensions = useMemo(() => ({
+  const dimensions = useMemo<Dimensions>(() => ({
       centerX: centerAreaWidth / 2,
       centerY: centerY,
       availableHeight: availableHeight,
@@ -588,20 +761,18 @@ export const CardStack: React.FC<{
       cardHeight: availableHeight * 0.75,
   }), [centerAreaWidth, centerY, availableHeight]);
 
-  const animatedCards = useAnimation(currentCardId, getCardPath, dimensions, setCurrentCard, navigationAction);
+  const animatedCards = useAnimation(currentCardId, getCardPath, dimensions, navigationAction);
 
   useEffect(() => { setPortalRoot(document.getElementById('portal-root')); }, []);
   useEffect(() => {
     if (!currentCardId || !currentCard) return;
-
-    // 如果卡片没有消息，或者已经有了一个不是占位符的有效标题，则不进行生成
     if (currentCard.messages.length === 0 || (currentCard.title && currentCard.title !== '新卡片')) {
         return;
     }
-    const timer = setTimeout(() => generateTitle(currentCardId), 3000); // 3 second delay
+    const timer = setTimeout(() => generateTitle(currentCardId), 2000);
     return () => clearTimeout(timer);
   }, [currentCardId, currentCard?.messages.length, currentCard?.title, generateTitle, lastMessageContent]);
-
+  
   const fetchAIForPreview = async (term: string) => {
     if (!apiUrl || !apiKey || !activeModel) {
       setPreviewState((prev) => ({ ...prev, content: "API settings are missing.", isLoading: false }));
@@ -667,6 +838,74 @@ export const CardStack: React.FC<{
     }
   };
 
+  // MODIFICATION: Add the streaming logic, adapted from InputArea.tsx
+  const fetchLLMStreamForNewCard = useCallback(async (cardId: string, history: CardMessage[], userMsgId?: string) => {
+    const aiMsgId = userMsgId ? `${userMsgId}_ai` : `msg_${Date.now()}_ai`;
+
+    appendMessage(cardId, { id: aiMsgId, role: 'ai', content: '', timestamp: Date.now() });
+
+    if (!apiUrl || !apiKey || !activeModel) {
+        updateMessage(cardId, aiMsgId, { content: "API settings are missing." });
+        return;
+    }
+
+    try {
+        const apiMessages = history.map(msg => ({
+            role: msg.role === 'ai' ? 'assistant' : 'user',
+            content: msg.content
+        }));
+        
+        const systemPromptContent = [globalSystemPrompt, dialogueSystemPrompt].filter(Boolean).join('\n\n');
+        const messagesForApi: any[] = [...apiMessages];
+        if (systemPromptContent) {
+            messagesForApi.unshift({ role: 'system', content: systemPromptContent });
+        }
+
+        const res = await fetch(apiUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+            body: JSON.stringify({ model: activeModel, stream: true, messages: messagesForApi }),
+        });
+
+        if (!res.ok || !res.body) {
+            const errorText = await res.text();
+            throw new Error(`API request failed: ${res.status} ${errorText}`);
+        }
+
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let aiContent = '';
+        mainReadLoop: while (true) {
+            const { value, done } = await reader.read();
+            if (done) break;
+            buffer += decoder.decode(value, { stream: true });
+            let boundary;
+            while ((boundary = buffer.indexOf('\n')) !== -1) {
+                const line = buffer.substring(0, boundary).trim();
+                buffer = buffer.substring(boundary + 1);
+                if (line === '' || !line.startsWith('data: ')) continue;
+                const data = line.substring(6);
+                if (data === '[DONE]') break mainReadLoop;
+                try {
+                    const json = JSON.parse(data);
+                    const delta = json.choices?.[0]?.delta?.content;
+                    if (delta) {
+                        aiContent += delta;
+                        const normalizedContent = normalizeMathDelimiters(aiContent);
+                        updateMessage(cardId, aiMsgId, { content: normalizedContent });
+                    }
+                } catch (e) {
+                    console.warn('Stream parsing error:', e, 'in line:', line);
+                }
+            }
+        }
+    } catch (error) {
+        console.error("LLM fetch error:", error);
+        updateMessage(cardId, aiMsgId, { content: "Failed to fetch AI response." });
+    }
+  }, [apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, appendMessage, updateMessage]);
+
   const handleTermClick = (term: string, rect: DOMRect) => {
     setPreviewState({ visible: true, isLoading: true, sourceTerm: term, content: '', top: rect.top + rect.height / 2, left: rect.right });
     fetchAIForPreview(term);
@@ -685,10 +924,33 @@ export const CardStack: React.FC<{
     setPreviewState(p => ({...p, visible: false}));
   };
 
+  // MODIFICATION: Update this handler to trigger the AI stream.
   const handleCreateFromSelection = () => {
     if (!selectedContent) return;
-    handleCreateCard([{ id: `msg_${Date.now()}`, role: 'user', content: selectedContent, timestamp: Date.now() }], currentCardId || undefined);
+    navigationAction.current = 'create';
+
+    const userMsg: CardMessage = { 
+      id: `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`, 
+      role: 'user', 
+      content: selectedContent, 
+      timestamp: Date.now() 
+    };
+    
+    // 1. Create the card with the user's message. This also sets it as the active card.
+    addCard([userMsg], currentCardId || undefined);
     setSelectedContent(null);
+
+    // 2. Get the new state to find the ID and history of the just-created card.
+    const { projects, activeProjectId } = useProjectStore.getState();
+    const activeProject = projects.find(p => p.id === activeProjectId);
+    const newCardId = activeProject?.currentCardId;
+    const newCard = activeProject?.cards.find(c => c.id === newCardId);
+
+    // 3. If the card was created successfully, trigger the AI stream for it.
+    if (newCardId && newCard) {
+      // This is a fire-and-forget call. The UI will update as the stream arrives.
+      fetchLLMStreamForNewCard(newCardId, newCard.messages, userMsg.id);
+    }
   };
   
   const handleDelete = (id: string) => {
@@ -700,29 +962,18 @@ export const CardStack: React.FC<{
       if (animatedCards && animatedCards.length > 0) {
           return animatedCards;
       }
-
-      const isTransitioning = currentCardId !== prevCardId;
-      const idForStableRender = isTransitioning && prevCardId ? prevCardId : currentCardId;
-
-      const stablePath = idForStableRender ? getCardPath(idForStableRender) : [];
+      
+      const idToRender = (currentCardId !== prevCardId && prevCardId) ? prevCardId : currentCardId;
+      if (!idToRender) return [];
+      const stablePath = getCardPath(idToRender);
       
       return stablePath.map((card, index) => {
           const depth = stablePath.length - 1 - index;
-          const pos = calculateCardPosition(depth, dimensions.centerX, dimensions.centerY, dimensions.availableHeight);
           return {
               id: card.id,
               card: card,
               status: 'stable' as AnimationStatus,
-              style: {
-                  width: dimensions.cardWidth, height: dimensions.cardHeight,
-                  left: pos.x, top: pos.y,
-                  transform: `translate(-50%, -50%) rotate(${pos.rotation}deg) scale(${pos.scale})`,
-                  filter: `blur(${pos.blur}px) brightness(${pos.brightness})`,
-                  opacity: pos.opacity,
-                  zIndex: 25 - depth,
-                  // REMOVED: Redundant transition property to prevent animation flash.
-                  // The '.card-container' class handles this.
-              }
+              style: getFullCardStyle(depth, dimensions),
           };
       });
   }, [animatedCards, currentCardId, prevCardId, getCardPath, dimensions, cards]);
@@ -732,41 +983,23 @@ export const CardStack: React.FC<{
       <style>{`
         .card-container {
           position: absolute;
-          /* Apply transition to all cards, controlled by JS logic */
           transition: all ${ANIMATION_DURATION}ms ease-in-out;
         }
         
-        .card-container.exiting-dissolve { 
-          animation: card-dissolve ${ANIMATION_DURATION}ms forwards ease-in-out; 
-        }
-        @keyframes card-dissolve { 
-          to { opacity: 0; transform: translate(-50%, -50%) scale(0.95); } 
-        }
+        .card-container.exiting-dissolve { animation: card-dissolve ${ANIMATION_DURATION}ms forwards ease-in-out; }
+        @keyframes card-dissolve { to { opacity: 0; transform: translate(-50%, -50%) scale(0.95); } }
 
-        .card-container.exiting-fly-right { 
-          animation: card-fly-right ${ANIMATION_DURATION}ms forwards ease-in-out; 
-        }
-        @keyframes card-fly-right { 
-          to { opacity: 0; transform: translate(30%, -50%) scale(1); } 
-        }
+        .card-container.exiting-fly-right { animation: card-fly-right ${ANIMATION_DURATION}ms forwards ease-in-out; }
+        @keyframes card-fly-right { to { opacity: 0; transform: translate(30%, -50%) scale(1); } }
         
-        .card-container.exiting-fly-up-right { 
-          animation: card-fly-up-right ${ANIMATION_DURATION}ms forwards ease-in-out; 
-        }
-        @keyframes card-fly-up-right { 
-          to { opacity: 0; transform: translate(-40%, -55%) scale(1.2) rotate(5deg); } 
-        }
+        .card-container.exiting-fly-up-right { animation: card-fly-up-right ${ANIMATION_DURATION}ms forwards ease-in-out; }
+        @keyframes card-fly-up-right { to { opacity: 0; transform: translate(-40%, -55%) scale(1.04) rotate(5deg); } }
         
-        .card-container.exiting-shrink-out { 
-          animation: card-shrink-out ${ANIMATION_DURATION}ms forwards ease-in-out; 
-        }
-        @keyframes card-shrink-out { 
-          from { opacity: 0.8; }
-          to { opacity: 0; transform: translate(-50%, -50%) scale(0.5); } 
-        }
+        .card-container.exiting-shrink-out { animation: card-shrink-out ${ANIMATION_DURATION}ms forwards ease-in-out; }
+        @keyframes card-shrink-out { from { opacity: 0.8; } to { opacity: 0; transform: translate(-50%, -50%) scale(0.5); } }
       `}</style>
       
-      {!currentCard && cardsToRender.length === 0 ? (
+      {!currentCardId && cardsToRender.length === 0 ? (
         <div className="absolute pointer-events-none" style={{ left: dimensions.centerX, top: dimensions.centerY, transform: 'translate(-50%, -50%)' }}>
           <h1 className="font-bruno-ace font-normal text-center text-[#13E425]" style={{ fontSize: '128px', lineHeight: '128px', textShadow: '0px 0px 24px #13E425' }} >
             Start Explore
@@ -774,31 +1007,31 @@ export const CardStack: React.FC<{
         </div>
       ) : (
         cardsToRender.map(ac => {
-            const isTopCard = ac.id === currentCardId && animatedCards.length === 0;
-            const isHovered = !isTopCard && ac.id === hoveredCardId;
+            const isAnimating = animatedCards.length > 0;
+            const isTopCard = !isAnimating && ac.id === currentCardId;
+            const isHovered = !isTopCard && !isAnimating && ac.id === hoveredCardId;
 
-            // Start with the base style
             let finalStyle = { ...ac.style };
 
-            // If the card is a parent card and is being hovered, apply hover styles
             if (isHovered) {
                 const baseScaleMatch = /scale\((.*?)\)/.exec(ac.style.transform as string);
                 const baseScale = baseScaleMatch ? parseFloat(baseScaleMatch[1]) : 1;
                 
                 finalStyle = {
                     ...finalStyle,
-                    // Apply hover styles: increase size, make fully visible and clear
                     transform: (ac.style.transform as string).replace(/scale\(.*?\)/, `scale(${baseScale * 1.02})`),
                     filter: 'blur(0px) brightness(1)',
                     opacity: 1
                 };
             }
-
+            
+            const zIndex = ac.style.zIndex;
+            const showCurrentDialog = isTopCard || (isAnimating && typeof zIndex === 'number' && zIndex >= 25);
+            
             return (
-              // The pointer-events logic from the previous fix is still necessary and correct
               <div key={ac.id} className={`card-container ${ac.status}`} style={{ ...finalStyle, pointerEvents: isTopCard ? 'auto' : 'none' }}>
                 <div style={{ pointerEvents: 'auto', width: '100%', height: '100%' }}>
-                  {isTopCard || ac.status === 'entering' || ac.status === 'stable-moving' ? (
+                  {showCurrentDialog ? (
                     <CurrentCardDialog
                       card={ac.card}
                       cardRef={isTopCard ? currentCardRef : undefined}
@@ -811,8 +1044,7 @@ export const CardStack: React.FC<{
                   ) : (
                     <ParentCard 
                       card={ac.card} 
-                      onClick={() => setCurrentCard(ac.id)}
-                      // Pass the state setters to the ParentCard
+                      onClick={() => !isAnimating && setCurrentCard(ac.id)}
                       onHoverStart={() => setHoveredCardId(ac.id)}
                       onHoverEnd={() => setHoveredCardId(null)}
                     />
