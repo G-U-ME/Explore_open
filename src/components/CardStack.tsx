@@ -755,7 +755,8 @@ export const CardStack: React.FC<{
   centerY: number;
   availableHeight: number;
   centerAreaWidth: number;
-}> = ({ centerY, availableHeight, centerAreaWidth }) => {
+  isMobile?: boolean;
+}> = ({ centerY, availableHeight, centerAreaWidth, isMobile = false }) => {
   // MODIFICATION: Add `appendMessage` and `updateMessage` for streaming AI responses
   const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle, appendMessage, updateMessage } = useCardStore();
   const { projects, activeProjectId } = useProjectStore();
@@ -776,13 +777,16 @@ export const CardStack: React.FC<{
   const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: '' });
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
 
-  const dimensions = useMemo<Dimensions>(() => ({
-      centerX: centerAreaWidth / 2,
-      centerY: centerY,
-      availableHeight: availableHeight,
-      cardWidth: centerAreaWidth * 0.75,
-      cardHeight: availableHeight * 0.75,
-  }), [centerAreaWidth, centerY, availableHeight]);
+  const dimensions = useMemo<Dimensions>(() => {
+    const scaleFactor = isMobile ? 0.90 : 0.75;
+    return {
+        centerX: centerAreaWidth / 2,
+        centerY: centerY,
+        availableHeight: availableHeight,
+        cardWidth: centerAreaWidth * scaleFactor,
+        cardHeight: availableHeight * scaleFactor,
+    };
+  }, [centerAreaWidth, centerY, availableHeight, isMobile]);
 
   const animatedCards = useAnimation(currentCardId, getCardPath, dimensions, navigationAction);
 
@@ -1023,60 +1027,64 @@ export const CardStack: React.FC<{
       `}</style>
       
       {!currentCardId && cardsToRender.length === 0 ? (
-        <div className="absolute pointer-events-none" style={{ left: dimensions.centerX, top: dimensions.centerY, transform: 'translate(-50%, -50%)' }}>
-          <h1 className="font-bruno-ace font-normal text-center text-[#13E425]" style={{ fontSize: '128px', lineHeight: '128px', textShadow: '0px 0px 24px #13E425' }} >
-            Start Explore
-          </h1>
-        </div>
-      ) : (
-        cardsToRender.map(ac => {
-            const isAnimating = animatedCards.length > 0;
-            const isTopCard = !isAnimating && ac.id === currentCardId;
-            const isHovered = !isTopCard && !isAnimating && ac.id === hoveredCardId;
-
-            let finalStyle = { ...ac.style };
-
-            if (isHovered) {
-                const baseScaleMatch = /scale\((.*?)\)/.exec(ac.style.transform as string);
-                const baseScale = baseScaleMatch ? parseFloat(baseScaleMatch[1]) : 1;
-                
-                finalStyle = {
-                    ...finalStyle,
-                    transform: (ac.style.transform as string).replace(/scale\(.*?\)/, `scale(${baseScale * 1.02})`),
-                    filter: 'blur(0px) brightness(1)',
-                    opacity: 1
-                };
-            }
-            
-            const zIndex = ac.style.zIndex;
-            const showCurrentDialog = isTopCard || (isAnimating && typeof zIndex === 'number' && zIndex >= 25);
-            
-            return (
-              <div key={ac.id} className={`card-container ${ac.status}`} style={{ ...finalStyle, pointerEvents: isTopCard ? 'auto' : 'none' }}>
-                <div style={{ pointerEvents: 'auto', width: '100%', height: '100%' }}>
-                  {showCurrentDialog ? (
-                    <CurrentCardDialog
-                      card={ac.card}
-                      cardRef={isTopCard ? currentCardRef : undefined}
-                      onDelete={() => handleDelete(ac.id)}
-                      onCreateNew={() => handleCreateCard([], ac.id)}
-                      onTextSelection={setSelectedContent}
-                      onCreateFromSelection={handleCreateFromSelection}
-                      onTermClick={handleTermClick}
-                    />
-                  ) : (
-                    <ParentCard 
-                      card={ac.card} 
-                      onClick={() => !isAnimating && setCurrentCard(ac.id)}
-                      onHoverStart={() => setHoveredCardId(ac.id)}
-                      onHoverEnd={() => setHoveredCardId(null)}
-                    />
-                  )}
-                </div>
+              <div className="absolute pointer-events-none" style={{ left: dimensions.centerX, top: dimensions.centerY, transform: 'translate(-50%, -50%)' }}>
+                <h1 className="font-bruno-ace font-normal text-center text-[#13E425]" style={{ 
+                  fontSize: isMobile ? '72px' : (centerAreaWidth < 480 ? '96px' : '128px'), 
+                  lineHeight: isMobile ? '72px' : (centerAreaWidth < 480 ? '96px' : '128px'), 
+                  textShadow: '0px 0px 24px #13E425' 
+                }} >
+                  Start Explore
+                </h1>
               </div>
-            );
-        })
-      )}
+            ) : (
+              cardsToRender.map(ac => {
+                  const isAnimating = animatedCards.length > 0;
+                  const isTopCard = !isAnimating && ac.id === currentCardId;
+                  const isHovered = !isTopCard && !isAnimating && ac.id === hoveredCardId;
+
+                  let finalStyle = { ...ac.style };
+
+                  if (isHovered) {
+                      const baseScaleMatch = /scale\((.*?)\)/.exec(ac.style.transform as string);
+                      const baseScale = baseScaleMatch ? parseFloat(baseScaleMatch[1]) : 1;
+                      
+                      finalStyle = {
+                          ...finalStyle,
+                          transform: (ac.style.transform as string).replace(/scale\(.*?\)/, `scale(${baseScale * 1.02})`),
+                          filter: 'blur(0px) brightness(1)',
+                          opacity: 1
+                      };
+                  }
+                  
+                  const zIndex = ac.style.zIndex;
+                  const showCurrentDialog = isTopCard || (isAnimating && typeof zIndex === 'number' && zIndex >= 25);
+                  
+                  return (
+                    <div key={ac.id} className={`card-container ${ac.status}`} style={{ ...finalStyle, pointerEvents: isTopCard ? 'auto' : 'none' }}>
+                      <div style={{ pointerEvents: 'auto', width: '100%', height: '100%' }}>
+                        {showCurrentDialog ? (
+                          <CurrentCardDialog
+                            card={ac.card}
+                            cardRef={isTopCard ? currentCardRef : undefined}
+                            onDelete={() => handleDelete(ac.id)}
+                            onCreateNew={() => handleCreateCard([], ac.id)}
+                            onTextSelection={setSelectedContent}
+                            onCreateFromSelection={handleCreateFromSelection}
+                            onTermClick={handleTermClick}
+                          />
+                        ) : (
+                          <ParentCard 
+                            card={ac.card} 
+                            onClick={() => !isAnimating && setCurrentCard(ac.id)}
+                            onHoverStart={() => setHoveredCardId(ac.id)}
+                            onHoverEnd={() => setHoveredCardId(null)}
+                          />
+                        )}
+                      </div>
+                    </div>
+                  );
+              })
+            )}
       
       {previewState.visible && portalRoot && ReactDOM.createPortal(
         <PreviewCard

@@ -69,75 +69,106 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   )
 }
 
-const calculateTreeLayout = (cards: CardData[], viewportHeight: number, containerWidth: number) => {
-  const cardMap = new Map(cards.map(card => [card.id, card]))
-  const layers: CardData[][] = []
-  const cardToDepth = new Map<string, number>()
-  
+interface TreeNavigationProps {
+  layoutMode?: 'vertical' | 'horizontal';
+}
+
+
+const calculateTreeLayout = (
+  cards: CardData[],
+  containerHeight: number,
+  containerWidth: number,
+  layoutMode: 'vertical' | 'horizontal'
+) => {
+  const cardMap = new Map(cards.map(card => [card.id, card]));
+  const layers: CardData[][] = [];
+  const cardToDepth = new Map<string, number>();
+
   const buildLayers = (cardId: string, depth: number) => {
-    if (cardToDepth.has(cardId) && cardToDepth.get(cardId)! <= depth) return
-    const card = cardMap.get(cardId)
-    if (!card) return
-    if (!layers[depth]) layers[depth] = []
+    if (cardToDepth.has(cardId) && cardToDepth.get(cardId)! <= depth) return;
+    const card = cardMap.get(cardId);
+    if (!card) return;
+    if (!layers[depth]) layers[depth] = [];
     if (!layers[depth].some(c => c.id === cardId)) {
-        layers[depth].push(card)
+      layers[depth].push(card);
     }
-    cardToDepth.set(cardId, depth)
-    card.children.forEach(childId => buildLayers(childId, depth + 1))
-  }
-  
-  const rootCards = cards.filter(card => !card.parentId)
-  rootCards.forEach(card => buildLayers(card.id, 0))
+    cardToDepth.set(cardId, depth);
+    card.children.forEach(childId => buildLayers(childId, depth + 1));
+  };
+
+  const rootCards = cards.filter(card => !card.parentId);
+  rootCards.forEach(card => buildLayers(card.id, 0));
   cards.forEach(card => {
     if (!cardToDepth.has(card.id)) {
-      let root = card
-      while(root.parentId && cardMap.has(root.parentId)) {
-        root = cardMap.get(root.parentId)!
+      let root = card;
+      while (root.parentId && cardMap.has(root.parentId)) {
+        root = cardMap.get(root.parentId)!;
       }
-      buildLayers(root.id, 0)
-    }
-  })
-  
-  const positions = new Map<string, { x: number, y: number }>()
-  const layerHeight = 80
-  const horizontalPadding = 40
-  // As per requirement, max 7 nodes horizontally. This defines the base spacing unit.
-  const nodesForSpacingCalculation = 7 
-  
-  const effectiveContainerWidth = containerWidth > 0 ? containerWidth : 300; 
-
-  const horizontalSpacing = (effectiveContainerWidth - horizontalPadding * 2) / (nodesForSpacingCalculation - 1);
-
-  let maxLayerContentWidth = 0
-  layers.forEach(layer => {
-    if (layer.length > 1) {
-      const currentLayerWidth = (layer.length - 1) * horizontalSpacing;
-      maxLayerContentWidth = Math.max(maxLayerContentWidth, currentLayerWidth);
+      buildLayers(root.id, 0);
     }
   });
 
-  const svgWidth = Math.max(effectiveContainerWidth, maxLayerContentWidth + (horizontalPadding * 2))
-  const verticalPadding = viewportHeight;
+  const positions = new Map<string, { x: number; y: number }>();
+
+  if (layoutMode === 'horizontal') {
+    const layerWidth = 100;
+    const verticalPadding = 20;
+    const verticalSpacing = 40;
+
+    let maxLayerContentHeight = 0;
+    layers.forEach(layer => {
+      if (layer.length > 1) {
+        maxLayerContentHeight = Math.max(maxLayerContentHeight, (layer.length - 1) * verticalSpacing);
+      }
+    });
+
+    const svgHeight = Math.max(containerHeight > 0 ? containerHeight : 100, maxLayerContentHeight + verticalPadding * 2);
+    const horizontalPadding = containerWidth;
+    const contentWidth = layers.length > 0 ? (layers.length - 1) * layerWidth : 0;
+    const svgWidth = contentWidth + horizontalPadding * 2;
+
+    layers.forEach((layer, depth) => {
+      const x = horizontalPadding + depth * layerWidth;
+      const layerContentHeight = (layer.length - 1) * verticalSpacing;
+      const startY = (svgHeight - layerContentHeight) / 2;
+      layer.forEach((card, index) => {
+        positions.set(card.id, { x, y: startY + index * verticalSpacing });
+      });
+    });
+    return { positions, svgHeight, svgWidth, layerHeight: verticalSpacing, layerWidth };
+  }
+
+  // Vertical layout (original logic)
+  const layerHeight = 80;
+  const horizontalPadding = 40;
+  const nodesForSpacingCalculation = 7;
+  const effectiveContainerWidth = containerWidth > 0 ? containerWidth : 300;
+  const horizontalSpacing = (effectiveContainerWidth - horizontalPadding * 2) / (nodesForSpacingCalculation - 1);
+
+  let maxLayerContentWidth = 0;
+  layers.forEach(layer => {
+    if (layer.length > 1) {
+      maxLayerContentWidth = Math.max(maxLayerContentWidth, (layer.length - 1) * horizontalSpacing);
+    }
+  });
+
+  const svgWidth = Math.max(effectiveContainerWidth, maxLayerContentWidth + horizontalPadding * 2);
+  const verticalPadding = containerHeight;
   const contentHeight = layers.length > 0 ? (layers.length - 1) * layerHeight : 0;
   const svgHeight = contentHeight + verticalPadding * 2;
 
   layers.forEach((layer, depth) => {
-    const y = svgHeight - (depth * layerHeight + verticalPadding)
-    if (layer.length === 0) return
-    
+    const y = svgHeight - (depth * layerHeight + verticalPadding);
     const layerContentWidth = (layer.length - 1) * horizontalSpacing;
-    const startX = (svgWidth - layerContentWidth) / 2
-    
+    const startX = (svgWidth - layerContentWidth) / 2;
     layer.forEach((card, index) => {
-        const x = startX + index * horizontalSpacing
-        positions.set(card.id, { x, y })
-    })
-  })
-  
-  return { positions, svgHeight, svgWidth, layerHeight }
-}
+      positions.set(card.id, { x: startX + index * horizontalSpacing, y });
+    });
+  });
+  return { positions, svgHeight, svgWidth, layerHeight, layerWidth: horizontalSpacing };
+};
 
-export const TreeNavigation: React.FC = () => {
+export const TreeNavigation: React.FC<TreeNavigationProps> = ({ layoutMode = 'vertical' }) => {
   const { setCurrentCard } = useCardStore()
   const { projects, activeProjectId } = useProjectStore();
   
@@ -153,13 +184,21 @@ export const TreeNavigation: React.FC = () => {
   const [containerWidth, setContainerWidth] = useState(0)
 
   useEffect(() => {
-    if (containerRef.current) {
-        setContainerHeight(containerRef.current.clientHeight);
-        setContainerWidth(containerRef.current.clientWidth);
+    const container = containerRef.current;
+    if (container) {
+      const resizeObserver = new ResizeObserver(() => {
+        setContainerHeight(container.clientHeight);
+        setContainerWidth(container.clientWidth);
+      });
+      resizeObserver.observe(container);
+      // Initial set
+      setContainerHeight(container.clientHeight);
+      setContainerWidth(container.clientWidth);
+      return () => resizeObserver.disconnect();
     }
   }, []);
 
-  const { positions, svgHeight, svgWidth, layerHeight } = useMemo(() => calculateTreeLayout(cards, containerHeight, containerWidth), [cards, containerHeight, containerWidth]);
+  const { positions, svgHeight, svgWidth, layerHeight, layerWidth } = useMemo(() => calculateTreeLayout(cards, containerHeight, containerWidth, layoutMode), [cards, containerHeight, containerWidth, layoutMode]);
 
   const radius = 14
 
@@ -167,19 +206,20 @@ export const TreeNavigation: React.FC = () => {
     if (currentCardId && positions.has(currentCardId) && containerRef.current) {
       isAutoScrolling.current = true
       const currentPos = positions.get(currentCardId)!
-      const realContainerHeight = containerRef.current.clientHeight
-      const targetScroll = currentPos.y - realContainerHeight / 2
       
-      containerRef.current.scrollTo({
-        top: Math.max(0, targetScroll),
-        behavior: 'smooth'
-      })
+      if (layoutMode === 'horizontal') {
+        const realContainerWidth = containerRef.current.clientWidth;
+        const targetScroll = currentPos.x - realContainerWidth / 2;
+        containerRef.current.scrollTo({ left: Math.max(0, targetScroll), behavior: 'smooth' });
+      } else {
+        const realContainerHeight = containerRef.current.clientHeight;
+        const targetScroll = currentPos.y - realContainerHeight / 2;
+        containerRef.current.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
+      }
       
-      setTimeout(() => {
-        isAutoScrolling.current = false
-      }, 500)
+      setTimeout(() => { isAutoScrolling.current = false }, 500)
     }
-  }, [currentCardId, positions])
+  }, [currentCardId, positions, layoutMode])
 
   useEffect(() => {
     autoCenterView()
@@ -194,24 +234,22 @@ export const TreeNavigation: React.FC = () => {
   const handleCardClick = (cardId: string) => setCurrentCard(cardId)
   const handleCardHover = (show: boolean, card: CardData) => setHoveredCard(show ? card : null)
 
+  const maskStyle = layoutMode === 'horizontal'
+    ? { background: 'linear-gradient(90deg, #101010 0%, rgba(16, 16, 16, 0.7) 15%, rgba(16, 16, 16, 0.25) 30%, rgba(16, 16, 16, 0) 50%, rgba(16, 16, 16, 0.25) 70%, rgba(16, 16, 16, 0.7) 85%, #101010 100%)' }
+    : { background: 'linear-gradient(180deg, #101010 0%, rgba(16, 16, 16, 0.7) 30%, rgba(16, 16, 16, 0.25) 40%, rgba(16, 16, 16, 0) 50%, rgba(16, 16, 16, 0.25) 60%, rgba(16, 16, 16, 0.7) 70%, #101010 100%)' };
+
   return (
-    // 1. Outer container: Defines the viewport boundary and is the anchor for the mask.
     <div className="h-full relative bg-transparent z-10 min-w-0 overflow-hidden">
-      
-      {/* 2. Inner scroller: This div handles the actual scrolling. */}
       <div 
         ref={containerRef}
-        className="h-full overflow-y-auto overflow-x-auto" // Use h-full, not absolute
+        className="h-full w-full overflow-auto"
         onScroll={handleScroll}
       >
         <svg
           width={svgWidth}
           height={svgHeight}
-          // The SVG is now a direct child of the scroller, no extra wrappers needed.
-          // The z-index is lower than the mask's.
           className="relative z-10" 
         >
-          {/* SVG content for lines */}
           {cards.map(parent => {
             if (!parent.children || parent.children.length === 0) return null
             const parentPos = positions.get(parent.id)
@@ -223,7 +261,9 @@ export const TreeNavigation: React.FC = () => {
                   const childPos = positions.get(childId)
                   if (!childPos) return null
 
-                  const d = `M ${parentPos.x} ${parentPos.y - radius} C ${parentPos.x} ${parentPos.y - layerHeight / 2} ${childPos.x} ${childPos.y + layerHeight / 2} ${childPos.x} ${childPos.y + radius}`
+                  const d = layoutMode === 'horizontal'
+                    ? `M ${parentPos.x + radius} ${parentPos.y} C ${parentPos.x + layerWidth! / 2} ${parentPos.y} ${childPos.x - layerWidth! / 2} ${childPos.y} ${childPos.x - radius} ${childPos.y}`
+                    : `M ${parentPos.x} ${parentPos.y - radius} C ${parentPos.x} ${parentPos.y - layerHeight / 2} ${childPos.x} ${childPos.y + layerHeight / 2} ${childPos.x} ${childPos.y + radius}`;
                   
                   return (
                     <path 
@@ -239,7 +279,6 @@ export const TreeNavigation: React.FC = () => {
             )
           })}
 
-          {/* SVG content for nodes */}
           {cards.map(card => {
             const pos = positions.get(card.id)
             if (!pos) return null
@@ -248,17 +287,10 @@ export const TreeNavigation: React.FC = () => {
         </svg>
       </div>
 
-      {/* 3. The mask: A sibling to the scroller, positioned absolutely over the outer container. */}
-      <div 
-        className="absolute inset-0 pointer-events-none z-20"
-      >
-        <div 
-          className="h-full"
-          style={{ background: 'linear-gradient(180deg, #101010 0%, rgba(16, 16, 16, 0.7) 30%, rgba(16, 16, 16, 0.25) 40%, rgba(16, 16, 16, 0) 50%, rgba(16, 16, 16, 0.25) 60%, rgba(16, 16, 16, 0.7) 70%, #101010 100%)' }}
-        />
+      <div className="absolute inset-0 pointer-events-none z-20">
+        <div className="h-full" style={maskStyle} />
       </div>
 
-      {/* The hover info box remains outside and on top, which is correct */}
       {hoveredCard && (
         <div className="absolute bottom-2 left-2 right-2 bg-[#4C4C4C] rounded-md p-2 text-white text-xs z-30">
           <div className="font-medium mb-0.5">{hoveredCard.title || '无标题卡片'}</div>

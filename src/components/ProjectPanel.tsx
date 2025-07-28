@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Plus, Settings, X, Sidebar } from 'lucide-react'; // <<< CHANGE: Import Sidebar
+import { Plus, Settings, X, Sidebar } from 'lucide-react';
 import { useSettingsStore } from '../stores/settingsStore';
 import {
   DndContext,
@@ -19,7 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import { useProjectStore, Project } from '../stores/projectStore';
-import { useUIStore } from '../stores/uiStore'; // <<< CHANGE: Import UI store
+import { useUIStore } from '../stores/uiStore';
 
 const SortableProjectItem: React.FC<{
   project: Project;
@@ -101,7 +101,8 @@ const SortableProjectItem: React.FC<{
   );
 };
 
-export const ProjectPanel: React.FC = () => {
+
+export const ProjectPanel: React.FC<{ isMobile: boolean }> = ({ isMobile }) => {
   const { 
     projects, 
     activeProjectId, 
@@ -112,11 +113,14 @@ export const ProjectPanel: React.FC = () => {
   } = useProjectStore();
 
   const { openSettingsModal } = useSettingsStore();
-  const { isLeftPanelCollapsed, toggleLeftPanel } = useUIStore(); // <<< CHANGE: Get state and action from store
+  const { isLeftPanelCollapsed, toggleLeftPanel } = useUIStore();
   const [showNewProject, setShowNewProject] = useState(false);
   const [newProjectName, setNewProjectName] = useState('');
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
+
+  // On mobile, content is always shown. On desktop, it depends on the collapsed state.
+  const shouldShowContent = isMobile || !isLeftPanelCollapsed;
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -170,9 +174,9 @@ export const ProjectPanel: React.FC = () => {
     }
   };
 
-  // <<< CHANGE: New handlers for panel toggle
   const handlePanelClick = () => {
-    if (isLeftPanelCollapsed) {
+    // On desktop, clicking the collapsed panel should expand it.
+    if (!isMobile && isLeftPanelCollapsed) {
       toggleLeftPanel();
     }
   };
@@ -182,25 +186,23 @@ export const ProjectPanel: React.FC = () => {
     toggleLeftPanel();
   };
 
-
   return (
-    // <<< CHANGE: Add click handler, conditional cursor, and overflow-hidden
     <div 
-      className={`h-full flex flex-col bg-transparent text-white relative z-10 overflow-hidden ${isLeftPanelCollapsed ? 'cursor-pointer' : ''}`}
+      className={`h-full flex flex-col text-white relative z-10 overflow-hidden ${
+        // Replicate old design: transparent on desktop. Mobile BG is handled by parent.
+        !isMobile ? 'bg-transparent' : ''
+      } ${(isLeftPanelCollapsed && !isMobile) ? 'cursor-pointer' : ''}`}
       onClick={handlePanelClick}
     >
-      {/* 上部分 - 项目管理区域 */}
-      {/* <<< CHANGE: Adjust padding for collapsed state */}
-      <div className={`flex-1 flex flex-col py-6 transition-all duration-300 ${isLeftPanelCollapsed ? 'px-3' : 'px-4'}`}>
-        {/* <<< CHANGE: New button container */}
-        <div className={`flex items-center self-start ${isLeftPanelCollapsed ? 'mb-0' : 'mb-6'} ${!isLeftPanelCollapsed ? 'space-x-2' : ''}`}>
+      <div className={`flex-1 flex flex-col py-6 transition-all duration-300 ${(!isMobile && isLeftPanelCollapsed) ? 'px-3' : 'px-4'}`}>
+        <div className={`flex items-center self-start ${(!isMobile && isLeftPanelCollapsed) ? 'mb-0' : 'mb-6'} ${shouldShowContent ? 'space-x-2' : ''}`}>
           <button
             onClick={handleToggleClick}
             className="p-2.5 bg-[#333333] hover:bg-[#444444] rounded-lg transition-colors flex-shrink-0"
           >
             <Sidebar size={24} />
           </button>
-          {!isLeftPanelCollapsed && (
+          {shouldShowContent && (
             <button
               onClick={() => setShowNewProject(true)}
               className="p-2.5 bg-[#333333] hover:bg-[#444444] rounded-lg transition-colors"
@@ -210,10 +212,8 @@ export const ProjectPanel: React.FC = () => {
           )}
         </div>
 
-        {/* <<< CHANGE: Conditionally render the rest of the content */}
-        {!isLeftPanelCollapsed && (
+        {shouldShowContent && (
           <div className="w-full max-w-xs space-y-2 self-center">
-            {/* 新建项目输入区域 */}
             {showNewProject && (
               <div className="p-3 bg-[#4C4C4C] rounded-xl mb-4">
                 <input
@@ -242,7 +242,6 @@ export const ProjectPanel: React.FC = () => {
               </div>
             )}
 
-            {/* 项目列表 */}
             <DndContext
               sensors={sensors}
               collisionDetection={closestCenter}
@@ -281,17 +280,14 @@ export const ProjectPanel: React.FC = () => {
         )}
       </div>
 
-      {/* <<< CHANGE: Conditionally render settings area */}
-      {!isLeftPanelCollapsed && (
+      {shouldShowContent && (
         <div className="p-4 relative z-10">
           <div className="flex items-center justify-between">
-            {/* 用户设置按钮 */}
             <button className="flex items-center gap-3 p-2 rounded-lg hover:bg-[#333] transition-colors">
               <div className="w-7 h-7 rounded-full border-2 border-white" />
               <span className="text-base font-normal text-white">Account</span>
             </button>
 
-            {/* APP设置按钮 */}
             <button className="p-2 rounded-lg hover:bg-[#333] transition-colors" onClick={openSettingsModal}>
               <Settings size={24} className="text-white" />
             </button>

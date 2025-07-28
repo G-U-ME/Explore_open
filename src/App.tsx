@@ -1,4 +1,4 @@
-// App.tsx
+// App.tsx (Optimized Version)
 import { Component, ErrorInfo, ReactNode, useRef, useEffect, useState } from 'react'
 import { ProjectPanel } from './components/ProjectPanel'
 import { CardStack } from './components/CardStack'
@@ -7,7 +7,7 @@ import { InputArea } from './components/InputArea'
 import SettingsModal from './components/SettingsModal'
 import { useProjectStore } from './stores/projectStore'
 import { CardData } from './stores/cardStore'
-import { useUIStore } from './stores/uiStore' // <<< CHANGE: Import UI store
+import { useUIStore } from './stores/uiStore'
 
 const useInputAreaHeight = () => {
   const inputAreaRef = useRef<HTMLDivElement>(null);
@@ -26,7 +26,9 @@ const useInputAreaHeight = () => {
   return { inputAreaHeight, inputAreaRef };
 };
 
-const RIGHT_PANEL_WIDTH = 300;
+const RIGHT_PANEL_WIDTH_DESKTOP = 300;
+const MOBILE_BREAKPOINT = 600;
+const MOBILE_PANEL_WIDTH = 300; 
 
 // ... (ErrorBoundary code is correct and remains unchanged) ...
 interface ErrorBoundaryState {
@@ -77,18 +79,87 @@ class ErrorBoundary extends Component<{ children: ReactNode }, ErrorBoundaryStat
 function App() {
   const { inputAreaHeight, inputAreaRef } = useInputAreaHeight();
   const [windowWidth, setWindowWidth] = useState(window.innerWidth);
+  const [windowHeight, setWindowHeight] = useState(window.innerHeight);
   
   const { projects, activeProjectId, setActiveProject, createProject, updateProject } = useProjectStore();
-  const { isLeftPanelCollapsed } = useUIStore(); // <<< CHANGE: Get state from UI store
+  const { isLeftPanelCollapsed, toggleLeftPanel } = useUIStore();
 
-  // <<< CHANGE: Define leftPanelWidth dynamically based on collapsed state
-  const COLLAPSED_WIDTH = 56; // Width for collapsed panel (padding + button size)
-  const expandedWidth = windowWidth < 1080 ? 200 : 300;
-  const leftPanelWidth = isLeftPanelCollapsed ? COLLAPSED_WIDTH : expandedWidth;
+  const isMobile = windowWidth < MOBILE_BREAKPOINT;
 
+  const [isDragging, setIsDragging] = useState(false);
+  const [panelPosition, setPanelPosition] = useState(isLeftPanelCollapsed ? -MOBILE_PANEL_WIDTH : 0);
+  const dragStartX = useRef(0);
+  const panelInitialPosition = useRef(0);
 
   useEffect(() => {
-    // One-time data migration from old format
+    if (isMobile && !isLeftPanelCollapsed) {
+      toggleLeftPanel();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isMobile]); 
+  
+  useEffect(() => {
+    if (isMobile) {
+      const targetPosition = isLeftPanelCollapsed ? -MOBILE_PANEL_WIDTH : 0;
+      setPanelPosition(targetPosition);
+    }
+  }, [isLeftPanelCollapsed, isMobile]);
+
+  const handleTouchStart = (e: React.TouchEvent) => {
+    if (!isMobile) return;
+    dragStartX.current = e.touches[0].clientX;
+    panelInitialPosition.current = panelPosition;
+    setIsDragging(false); // Reset dragging state
+  };
+
+  const handleTouchMove = (e: React.TouchEvent) => {
+    if (!isMobile || dragStartX.current === 0) return;
+
+    const currentX = e.touches[0].clientX;
+    const deltaX = currentX - dragStartX.current;
+    
+    // Only set isDragging to true after a certain threshold to avoid accidental drags
+    if (!isDragging && Math.abs(deltaX) > 10) {
+        setIsDragging(true);
+    }
+    
+    // If we are not dragging, don't update position
+    if (!isDragging) return;
+
+    let newPos = panelInitialPosition.current + deltaX;
+    newPos = Math.max(-MOBILE_PANEL_WIDTH, Math.min(newPos, 0));
+    setPanelPosition(newPos);
+  };
+
+  const handleTouchEnd = () => {
+    if (!isMobile) return;
+    
+    // Only snap if we were actually dragging
+    if (isDragging) {
+        const SNAP_THRESHOLD = 80;
+        const currentPosition = panelPosition;
+
+        if (isLeftPanelCollapsed) {
+            if (currentPosition - (-MOBILE_PANEL_WIDTH) > SNAP_THRESHOLD) {
+                toggleLeftPanel(); // Snap open
+            } else {
+                setPanelPosition(-MOBILE_PANEL_WIDTH); // Snap back closed
+            }
+        } else {
+            if (Math.abs(currentPosition) > SNAP_THRESHOLD) {
+                toggleLeftPanel(); // Snap closed
+            } else {
+                setPanelPosition(0); // Snap back open
+            }
+        }
+    }
+
+    setIsDragging(false);
+    dragStartX.current = 0;
+  };
+  
+  // (Data migration and other effects remain unchanged)
+  useEffect(() => {
     const oldDataRaw = localStorage.getItem('ai-card-tree-storage');
     if (oldDataRaw) {
       try {
@@ -110,7 +181,6 @@ function App() {
   }, [createProject, updateProject, setActiveProject]);
   
   useEffect(() => {
-    // If no project is active, activate the most recent one.
     if (!activeProjectId && projects.length > 0) {
       const sortedProjects = [...projects].sort((a, b) => b.createdAt - a.createdAt);
       setActiveProject(sortedProjects[0].id);
@@ -120,34 +190,68 @@ function App() {
   useEffect(() => {
     const handleResize = () => {
       setWindowWidth(window.innerWidth);
+      setWindowHeight(window.innerHeight);
     };
     window.addEventListener('resize', handleResize);
     return () => window.removeEventListener('resize', handleResize);
   }, []);
 
-  const screenHeight = window.innerHeight;
-  const availableHeight = screenHeight - inputAreaHeight;
+  const COLLAPSED_WIDTH = 56;
+  const expandedWidth = windowWidth < 1080 ? 200 : 300;
+  const leftPanelWidth = isLeftPanelCollapsed ? COLLAPSED_WIDTH : expandedWidth;
+  const topNavHeightMobile = isMobile ? inputAreaHeight : 0;
+  const centerAreaWidth = isMobile ? windowWidth : windowWidth - leftPanelWidth - RIGHT_PANEL_WIDTH_DESKTOP;
+  const availableHeight = windowHeight - topNavHeightMobile - inputAreaHeight;
+  const cardStackContainerTop = topNavHeightMobile;
   const cardCenterY = availableHeight / 2;
-  const centerAreaWidth = windowWidth - leftPanelWidth - RIGHT_PANEL_WIDTH;
   const activeProject = projects.find(p => p.id === activeProjectId);
+
+  // --- CHANGE: Define transition classes conditionally ---
+  const transitionClasses = !isDragging ? 'transition-all duration-300 ease-in-out' : '';
 
   return (
     <ErrorBoundary>
       <SettingsModal />
-      <div className="h-screen w-screen bg-[#101010] text-white font-inter relative overflow-hidden">
+      <div 
+        className="h-screen w-screen bg-[#101010] text-white font-inter relative overflow-hidden"
+        onTouchStart={handleTouchStart}
+        onTouchMove={handleTouchMove}
+        onTouchEnd={handleTouchEnd}
+      >
+        
+        {isMobile && activeProjectId && (
+          <div
+            className="absolute top-0 z-10 pointer-events-none"
+            style={{
+              left: '0px',
+              right: '0px',
+              height: `${topNavHeightMobile}px`,
+            }}
+          >
+            <div className="w-full h-full pointer-events-auto">
+              <TreeNavigation key={`tree-mobile-${activeProjectId}`} layoutMode="horizontal" />
+            </div>
+          </div>
+        )}
+
+        {/* Card Stack Area */}
         <div
-          className="absolute top-0 bottom-0 z-0 transition-all duration-300 ease-in-out" // <<< CHANGE: Added transition
+          // --- CHANGE: Use className for transitions ---
+          className={`absolute z-0 ${transitionClasses}`}
           style={{
-            left: `${leftPanelWidth}px`,
-            right: `${RIGHT_PANEL_WIDTH}px`,
+            top: `${cardStackContainerTop}px`,
+            bottom: `${inputAreaHeight}px`,
+            left: isMobile ? '0px' : `${leftPanelWidth}px`,
+            right: isMobile ? '0px' : `${RIGHT_PANEL_WIDTH_DESKTOP}px`,
           }}
         >
           {activeProjectId && activeProject ? (
             <CardStack
-              key={activeProjectId} // Ensure re-render on project switch
+              key={activeProjectId}
               centerY={cardCenterY}
               availableHeight={availableHeight}
               centerAreaWidth={centerAreaWidth}
+              isMobile={isMobile}
             />
           ) : (
             <div className="w-full h-full flex items-center justify-center">
@@ -161,32 +265,39 @@ function App() {
 
         {/* Left Panel Container */}
         <div
-          className="absolute top-0 left-0 h-full z-10 pointer-events-none transition-all duration-300 ease-in-out" // <<< CHANGE: Added transition
-          style={{ 
-            width: `${leftPanelWidth}px` 
+          // --- CHANGE: Use className for transitions ---
+          className={`absolute top-0 left-0 h-full ${transitionClasses}`}
+          style={{
+            width: isMobile ? `${MOBILE_PANEL_WIDTH}px` : `${leftPanelWidth}px`,
+            transform: isMobile ? `translateX(${panelPosition}px)` : 'none',
+            zIndex: 40,
           }}
         >
-          <div className="w-full h-full pointer-events-auto">
-            <ProjectPanel />
+          <div className={`w-full h-full pointer-events-auto ${isMobile ? 'bg-black/80' : 'bg-transparent'}`}>
+            <ProjectPanel isMobile={isMobile} />
           </div>
         </div>
 
-        {/* Right Panel Container */}
-        <div
-          className="absolute top-0 right-0 h-full z-10 pointer-events-none"
-          style={{ width: `${RIGHT_PANEL_WIDTH}px` }}
-        >
-          <div className="w-full h-full pointer-events-auto">
-            {activeProjectId && <TreeNavigation key={`tree-${activeProjectId}`} />}
+        {/* Right Panel Container (Desktop Only) */}
+        {!isMobile && (
+          <div
+            className="absolute top-0 right-0 h-full z-10 pointer-events-none"
+            style={{ width: `${RIGHT_PANEL_WIDTH_DESKTOP}px` }}
+          >
+            <div className="w-full h-full pointer-events-auto">
+              {activeProjectId && <TreeNavigation key={`tree-desktop-${activeProjectId}`} layoutMode="vertical" />}
+            </div>
           </div>
-        </div>
+        )}
 
+        {/* InputArea Container */}
         <div
           ref={inputAreaRef}
-          className="absolute bottom-0 z-10 transition-all duration-300 ease-in-out" // <<< CHANGE: Added transition
+          // --- CHANGE: Use className for transitions ---
+          className={`absolute bottom-0 z-10 ${transitionClasses}`}
           style={{
-            left: `${leftPanelWidth}px`,
-            right: `${RIGHT_PANEL_WIDTH}px`,
+            left: isMobile ? '0px' : `${leftPanelWidth}px`,
+            right: isMobile ? '0px' : `${RIGHT_PANEL_WIDTH_DESKTOP}px`,
           }}
         >
           {activeProjectId && <InputArea key={`input-${activeProjectId}`} />}
