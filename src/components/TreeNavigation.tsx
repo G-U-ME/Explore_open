@@ -10,6 +10,7 @@ interface TreeNodeProps {
   isCurrent: boolean
   isActive: boolean
   onHover: (show: boolean, card: CardData) => void
+  radius: number
 }
 
 const TreeNode: React.FC<TreeNodeProps> = ({ 
@@ -19,10 +20,9 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   onClick, 
   isCurrent, 
   isActive, 
-  onHover 
+  onHover,
+  radius 
 }) => {
-  const radius = 14
-  
   const styles = {
     default: {
       fill: 'transparent',
@@ -111,9 +111,9 @@ const calculateTreeLayout = (
   const positions = new Map<string, { x: number; y: number }>();
 
   if (layoutMode === 'horizontal') {
-    const layerWidth = 100;
+    const layerWidth = 60; // 缩小层间距 (100 * 0.6)
     const verticalPadding = 20;
-    const verticalSpacing = 40;
+    const verticalSpacing = 32; // 缩小同层节点间距 (40 * 0.8)
 
     let maxLayerContentHeight = 0;
     layers.forEach(layer => {
@@ -200,7 +200,7 @@ export const TreeNavigation: React.FC<TreeNavigationProps> = ({ layoutMode = 've
 
   const { positions, svgHeight, svgWidth, layerHeight, layerWidth } = useMemo(() => calculateTreeLayout(cards, containerHeight, containerWidth, layoutMode), [cards, containerHeight, containerWidth, layoutMode]);
 
-  const radius = 14
+  const radius = layoutMode === 'horizontal' ? 14 * 0.75 : 14;
 
   const autoCenterView = useCallback(() => {
     if (currentCardId && positions.has(currentCardId) && containerRef.current) {
@@ -282,7 +282,7 @@ export const TreeNavigation: React.FC<TreeNavigationProps> = ({ layoutMode = 've
           {cards.map(card => {
             const pos = positions.get(card.id)
             if (!pos) return null
-            return <TreeNode key={card.id} card={card} x={pos.x} y={pos.y} onClick={() => handleCardClick(card.id)} isCurrent={card.id === currentCardId} isActive={hoveredCard?.id === card.id} onHover={handleCardHover} />
+            return <TreeNode key={card.id} card={card} x={pos.x} y={pos.y} onClick={() => handleCardClick(card.id)} isCurrent={card.id === currentCardId} isActive={hoveredCard?.id === card.id} onHover={handleCardHover} radius={radius} />
           })}
         </svg>
       </div>
