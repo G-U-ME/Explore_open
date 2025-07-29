@@ -258,7 +258,8 @@ const CurrentCardDialog: React.FC<{
   onTextSelection: (text: string) => void;
   onCreateFromSelection: () => void;
   onTermClick: (term: string, rect: DOMRect) => void;
-}> = ({ card, cardRef, onDelete, onCreateNew, onTextSelection, onCreateFromSelection, onTermClick }) => {
+  isMobile?: boolean;
+}> = ({ card, cardRef, onDelete, onCreateNew, onTextSelection, onCreateFromSelection, onTermClick, isMobile = false }) => {
   const [selectionButton, setSelectionButton] = useState({ visible: false, top: 0, left: 0 });
   const handleTextSelection = useCallback(() => {
     const selection = window.getSelection();
@@ -311,7 +312,7 @@ const CurrentCardDialog: React.FC<{
       )}
 
       <div className="flex items-center justify-between w-full mb-2 pb-1 border-b border-[#333]">
-        <span className="font-normal text-title leading-9 flex-1 truncate pr-2">{card.title || 'Untitled Card'}</span>
+        <span className={`font-normal flex-1 truncate pr-2 ${isMobile ? 'text-lg leading-8' : 'text-title leading-9'}`}>{card.title || 'Untitled Card'}</span>
         <div className="flex items-center gap-2">
           <button onClick={onCreateNew} className="w-9 h-9 bg-[#4C4C4C] rounded-full flex items-center justify-center shadow-card hover:bg-[#5C5C5C]" title="Create new card">
             <ZoomIn className="w-5 h-5" color="#13E425" />
@@ -328,18 +329,18 @@ const CurrentCardDialog: React.FC<{
               msg.role === 'user' ? (
                 <div key={msg.id || idx} className="flex justify-end">
                   <div className="bg-[#4C4C4C] rounded-[16px_4px_16px_16px] px-3 py-2 max-w-[90%]">
-                    <span className="text-content whitespace-pre-wrap">{msg.content}</span>
+                    <span className={`${isMobile ? 'text-base' : 'text-content'} whitespace-pre-wrap`}>{msg.content}</span>
                   </div>
                 </div>
               ) : (
-                <div key={msg.id || idx} className="text-content max-w-full">
+                <div key={msg.id || idx} className={`${isMobile ? 'text-base' : 'text-content'} max-w-full`}>
                   <MarkdownRenderer content={msg.content} onTermClick={onTermClick} />
                 </div>
               )
             ))}
           </div>
         ) : (
-          <div className="text-center text-[#888] text-lg py-4">Start Exploring</div>
+          <div className={`text-center text-[#888] py-4 ${isMobile ? 'text-base' : 'text-lg'}`}>Start Exploring</div>
         )}
       </div>
     </div>
@@ -351,7 +352,8 @@ const ParentCard: React.FC<{
   onClick: () => void;
   onHoverStart: () => void;
   onHoverEnd: () => void;
-}> = ({ card, onClick, onHoverStart, onHoverEnd }) => {
+  isMobile?: boolean;
+}> = ({ card, onClick, onHoverStart, onHoverEnd, isMobile = false }) => {
   return (
     <div
       className="absolute top-0 left-0 w-full h-full cursor-pointer transition-all duration-300 ease-in-out bg-[#222222] rounded-[24px] shadow-card"
@@ -363,7 +365,7 @@ const ParentCard: React.FC<{
       onMouseLeave={onHoverEnd}
     >
       <div className="p-4 h-full flex flex-col text-white overflow-hidden pointer-events-none">
-        <div className="font-normal text-title leading-9 mb-2 pb-1 border-b border-[#333] truncate">
+        <div className={`font-normal mb-2 pb-1 border-b border-[#333] truncate ${isMobile ? 'text-base leading-7' : 'text-title leading-9'}`}>
           {card.title || 'Untitled Card'}
         </div>
         <div className="w-full flex-1 overflow-hidden min-h-0 relative text-sm">
@@ -374,11 +376,11 @@ const ParentCard: React.FC<{
                 msg.role === 'user' ? (
                   <div key={msg.id || idx} className="flex justify-end">
                     <div className="bg-[#4C4C4C] rounded-[16px_4px_16px_16px] px-3 py-2 max-w-[90%]">
-                      <span className="text-content whitespace-pre-wrap">{msg.content}</span>
+                      <span className={`${isMobile ? 'text-sm' : 'text-content'} whitespace-pre-wrap`}>{msg.content}</span>
                     </div>
                   </div>
                 ) : (
-                  <div key={msg.id || idx} className="text-content max-w-full">
+                  <div key={msg.id || idx} className={`${isMobile ? 'text-sm' : 'text-content'} max-w-full`}>
                     <MarkdownRenderer content={msg.content} />
                   </div>
                 )
@@ -1071,6 +1073,7 @@ export const CardStack: React.FC<{
                             onTextSelection={setSelectedContent}
                             onCreateFromSelection={handleCreateFromSelection}
                             onTermClick={handleTermClick}
+                            isMobile={isMobile}
                           />
                         ) : (
                           <ParentCard 
@@ -1078,6 +1081,7 @@ export const CardStack: React.FC<{
                             onClick={() => !isAnimating && setCurrentCard(ac.id)}
                             onHoverStart={() => setHoveredCardId(ac.id)}
                             onHoverEnd={() => setHoveredCardId(null)}
+                            isMobile={isMobile}
                           />
                         )}
                       </div>
