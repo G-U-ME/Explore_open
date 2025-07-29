@@ -91,6 +91,14 @@ function App() {
   const dragStartX = useRef(0);
   const panelInitialPosition = useRef(0);
 
+  // --- CHANGE: Handler to close panel on outside click ---
+  const handleOutsidePanelClick = () => {
+    // Only applies to mobile when the panel is open
+    if (isMobile && !isLeftPanelCollapsed) {
+      toggleLeftPanel();
+    }
+  };
+
   useEffect(() => {
     if (isMobile && !isLeftPanelCollapsed) {
       toggleLeftPanel();
@@ -107,6 +115,17 @@ function App() {
 
   const handleTouchStart = (e: React.TouchEvent) => {
     if (!isMobile) return;
+
+    const target = e.target as HTMLElement;
+
+    // Prevent panel drag on specific elements
+    if (target.closest('[data-dnd-item="true"]')) {
+      return;
+    }
+    if (isLeftPanelCollapsed && target.closest('[data-no-panel-drag="true"]')) {
+      return;
+    }
+
     dragStartX.current = e.touches[0].clientX;
     panelInitialPosition.current = panelPosition;
     setIsDragging(false); // Reset dragging state
@@ -206,7 +225,6 @@ function App() {
   const cardCenterY = availableHeight / 2;
   const activeProject = projects.find(p => p.id === activeProjectId);
 
-  // --- CHANGE: Define transition classes conditionally ---
   const transitionClasses = !isDragging ? 'transition-all duration-300 ease-in-out' : '';
 
   return (
@@ -217,10 +235,12 @@ function App() {
         onTouchStart={handleTouchStart}
         onTouchMove={handleTouchMove}
         onTouchEnd={handleTouchEnd}
+        onClick={handleOutsidePanelClick} // --- CHANGE: Added onClick to the main container ---
       >
         
         {isMobile && activeProjectId && (
           <div
+            data-no-panel-drag="true"
             className="absolute top-0 z-10 pointer-events-none"
             style={{
               left: '0px',
@@ -236,7 +256,6 @@ function App() {
 
         {/* Card Stack Area */}
         <div
-          // --- CHANGE: Use className for transitions ---
           className={`absolute z-0 ${transitionClasses}`}
           style={{
             top: `${cardStackContainerTop}px`,
@@ -265,13 +284,13 @@ function App() {
 
         {/* Left Panel Container */}
         <div
-          // --- CHANGE: Use className for transitions ---
           className={`absolute top-0 left-0 h-full ${transitionClasses}`}
           style={{
             width: isMobile ? `${MOBILE_PANEL_WIDTH}px` : `${leftPanelWidth}px`,
             transform: isMobile ? `translateX(${panelPosition}px)` : 'none',
             zIndex: 40,
           }}
+          onClick={(e) => e.stopPropagation()} // --- CHANGE: Stop clicks inside the panel from closing it ---
         >
           <div className={`w-full h-full pointer-events-auto ${isMobile ? 'bg-black/80' : 'bg-transparent'}`}>
             <ProjectPanel isMobile={isMobile} />
@@ -293,7 +312,6 @@ function App() {
         {/* InputArea Container */}
         <div
           ref={inputAreaRef}
-          // --- CHANGE: Use className for transitions ---
           className={`absolute bottom-0 z-10 ${transitionClasses}`}
           style={{
             left: isMobile ? '0px' : `${leftPanelWidth}px`,

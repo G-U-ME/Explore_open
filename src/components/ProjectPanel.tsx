@@ -6,6 +6,7 @@ import {
   closestCenter,
   KeyboardSensor,
   PointerSensor,
+  TouchSensor,
   useSensor,
   useSensors,
   DragEndEvent,
@@ -50,19 +51,63 @@ const SortableProjectItem: React.FC<{
     transition,
   };
 
+  const pressTimer = React.useRef<NodeJS.Timeout>();
+  const isLongPress = React.useRef(false);
+  const isDragging = React.useRef(false);
+
+  const handlePointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    listeners?.onPointerDown?.(e);
+    isLongPress.current = false;
+    isDragging.current = false;
+    pressTimer.current = setTimeout(() => {
+      isLongPress.current = true;
+      if (!isDragging.current) {
+        onStartRename(project);
+      }
+    }, 500);
+  };
+
+  const handlePointerMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    listeners?.onPointerMove?.(e);
+    if (!isDragging.current && (e.movementX !== 0 || e.movementY !== 0)) {
+       isDragging.current = true;
+       clearTimeout(pressTimer.current);
+    }
+  };
+
+  const handlePointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    listeners?.onPointerUp?.(e);
+    clearTimeout(pressTimer.current);
+    if (!isLongPress.current && !isDragging.current) {
+      onSwitch(project.id);
+    }
+  };
+
+  const handlePointerCancel = (e: React.PointerEvent<HTMLDivElement>) => {
+    listeners?.onPointerCancel?.(e);
+    clearTimeout(pressTimer.current);
+  };
+  
+  // --- FIX: Create a correctly typed wrapper for onKeyDown ---
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Safely call dnd-kit's keyboard handler
+    listeners?.onKeyDown?.(e);
+  };
+
   return (
     <div
       ref={setNodeRef}
       style={style}
       {...attributes}
-      {...listeners}
+      // Use the correctly typed wrapper function
+      onKeyDown={handleKeyDown} 
+      onPointerDown={handlePointerDown}
+      onPointerMove={handlePointerMove}
+      onPointerUp={handlePointerUp}
+      onPointerCancel={handlePointerCancel}
+      data-dnd-item="true"
       key={project.id}
-      onClick={() => onSwitch(project.id)}
-      onContextMenu={e => {
-        e.preventDefault();
-        onStartRename(project);
-      }}
-      className={`group p-3 rounded-xl cursor-pointer transition-colors relative ${
+      className={`group p-3 rounded-xl cursor-pointer transition-colors relative touch-none ${
         isActive
           ? 'bg-[#5A5A5A]'
           : 'bg-[#3A3A3A] hover:bg-[#4A4A4A]'
@@ -81,9 +126,10 @@ const SortableProjectItem: React.FC<{
             className="w-full p-0 bg-transparent text-center text-white text-base font-normal border-b border-white focus:outline-none"
             autoFocus
             onClick={e => e.stopPropagation()}
+            onPointerDown={e => e.stopPropagation()}
           />
         ) : (
-          <span className="text-base font-normal text-white">
+          <span className="text-base font-normal text-white pointer-events-none">
             {project.name}
           </span>
         )}
@@ -125,7 +171,14 @@ export const ProjectPanel: React.FC<{ isMobile: boolean }> = ({ isMobile }) => {
   const sensors = useSensors(
     useSensor(PointerSensor, {
       activationConstraint: {
-        distance: 2,
+        distance: 10,
+      },
+    }),
+    useSensor(TouchSensor, {
+      // 手指需要按住 250ms 才能激活拖拽，这是移动端常见的交互
+      activationConstraint: {
+        delay: 250,
+        tolerance: 5,
       },
     }),
     useSensor(KeyboardSensor, {
