@@ -11,6 +11,7 @@ interface TreeNodeProps {
   isActive: boolean
   onHover: (show: boolean, card: CardData) => void
   radius: number
+  layoutMode: 'vertical' | 'horizontal'; // Added layoutMode prop
 }
 
 const TreeNode: React.FC<TreeNodeProps> = ({ 
@@ -21,7 +22,8 @@ const TreeNode: React.FC<TreeNodeProps> = ({
   isCurrent, 
   isActive, 
   onHover,
-  radius 
+  radius,
+  layoutMode // Destructure layoutMode
 }) => {
   const styles = {
     default: {
@@ -46,12 +48,42 @@ const TreeNode: React.FC<TreeNodeProps> = ({
 
   const currentStyle = isCurrent ? styles.current : isActive ? styles.active : styles.default
 
+  // Handlers for mouse events (for desktop/vertical mode)
+  const handleMouseEnter = useCallback(() => {
+    if (layoutMode !== 'horizontal') {
+      onHover(true, card);
+    }
+  }, [layoutMode, onHover, card]);
+
+  const handleMouseLeave = useCallback(() => {
+    if (layoutMode !== 'horizontal') {
+      onHover(false, card);
+    }
+  }, [layoutMode, onHover, card]);
+
+  // Handlers for touch events (for mobile/horizontal mode)
+  const handleTouchStart = useCallback((e: React.TouchEvent) => {
+    if (layoutMode === 'horizontal') {
+      e.stopPropagation(); // Prevent scroll interference
+      onHover(true, card);
+    }
+  }, [layoutMode, onHover, card]);
+
+  const handleTouchEnd = useCallback((e: React.TouchEvent) => {
+    if (layoutMode === 'horizontal') {
+      e.stopPropagation(); // Prevent scroll interference
+      onHover(false, card);
+    }
+  }, [layoutMode, onHover, card]);
+
   return (
     <g
       className="cursor-pointer"
       onClick={onClick}
-      onMouseEnter={() => onHover(true, card)}
-      onMouseLeave={() => onHover(false, card)}
+      onMouseEnter={handleMouseEnter}
+      onMouseLeave={handleMouseLeave}
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
     >
       <circle
         cx={x}
@@ -98,6 +130,8 @@ const calculateTreeLayout = (
 
   const rootCards = cards.filter(card => !card.parentId);
   rootCards.forEach(card => buildLayers(card.id, 0));
+  // This loop ensures all cards are eventually placed, even if they aren't directly linked to a root
+  // (e.g., if a root card was deleted or parentId was inconsistent)
   cards.forEach(card => {
     if (!cardToDepth.has(card.id)) {
       let root = card;
@@ -122,8 +156,9 @@ const calculateTreeLayout = (
       }
     });
 
+    // Ensure svgHeight is at least containerHeight to prevent content from being cut off if container is large
     const svgHeight = Math.max(containerHeight > 0 ? containerHeight : 100, maxLayerContentHeight + verticalPadding * 2);
-    const horizontalPadding = containerWidth;
+    const horizontalPadding = containerWidth / 2; // Adjusted padding for horizontal centering within a narrower view
     const contentWidth = layers.length > 0 ? (layers.length - 1) * layerWidth : 0;
     const svgWidth = contentWidth + horizontalPadding * 2;
 
@@ -141,7 +176,7 @@ const calculateTreeLayout = (
   // Vertical layout (original logic)
   const layerHeight = 80;
   const horizontalPadding = 40;
-  const nodesForSpacingCalculation = 7;
+  const nodesForSpacingCalculation = 7; // This seems to be an arbitrary number for spacing, might need review for dynamic content
   const effectiveContainerWidth = containerWidth > 0 ? containerWidth : 300;
   const horizontalSpacing = (effectiveContainerWidth - horizontalPadding * 2) / (nodesForSpacingCalculation - 1);
 
@@ -153,7 +188,7 @@ const calculateTreeLayout = (
   });
 
   const svgWidth = Math.max(effectiveContainerWidth, maxLayerContentWidth + horizontalPadding * 2);
-  const verticalPadding = containerHeight;
+  const verticalPadding = containerHeight / 2; // Adjusted padding for vertical centering
   const contentHeight = layers.length > 0 ? (layers.length - 1) * layerHeight : 0;
   const svgHeight = contentHeight + verticalPadding * 2;
 
@@ -200,7 +235,8 @@ export const TreeNavigation: React.FC<TreeNavigationProps> = ({ layoutMode = 've
 
   const { positions, svgHeight, svgWidth, layerHeight, layerWidth } = useMemo(() => calculateTreeLayout(cards, containerHeight, containerWidth, layoutMode), [cards, containerHeight, containerWidth, layoutMode]);
 
-  const radius = layoutMode === 'horizontal' ? 14 * 0.75 : 14;
+  // Adjust radius based on layoutMode for better visibility/touchability
+  const radius = layoutMode === 'horizontal' ? 14 * 0.75 : 14; 
 
   const autoCenterView = useCallback(() => {
     if (currentCardId && positions.has(currentCardId) && containerRef.current) {
@@ -209,10 +245,12 @@ export const TreeNavigation: React.FC<TreeNavigationProps> = ({ layoutMode = 've
       
       if (layoutMode === 'horizontal') {
         const realContainerWidth = containerRef.current.clientWidth;
+        // Center the current card vertically in horizontal layout
         const targetScroll = currentPos.x - realContainerWidth / 2;
         containerRef.current.scrollTo({ left: Math.max(0, targetScroll), behavior: 'smooth' });
       } else {
         const realContainerHeight = containerRef.current.clientHeight;
+        // Center the current card horizontally in vertical layout
         const targetScroll = currentPos.y - realContainerHeight / 2;
         containerRef.current.scrollTo({ top: Math.max(0, targetScroll), behavior: 'smooth' });
       }
@@ -222,8 +260,12 @@ export const TreeNavigation: React.FC<TreeNavigationProps> = ({ layoutMode = 've
   }, [currentCardId, positions, layoutMode])
 
   useEffect(() => {
-    autoCenterView()
-  }, [currentCardId, autoCenterView])
+    // Wait for positions to be calculated and container to be rendered before centering
+    if (cards.length > 0 && containerRef.current) {
+        autoCenterView()
+    }
+  }, [currentCardId, autoCenterView, cards.length, containerRef.current]);
+
 
   const handleScroll = () => {
     if (isAutoScrolling.current) return
@@ -282,7 +324,18 @@ export const TreeNavigation: React.FC<TreeNavigationProps> = ({ layoutMode = 've
           {cards.map(card => {
             const pos = positions.get(card.id)
             if (!pos) return null
-            return <TreeNode key={card.id} card={card} x={pos.x} y={pos.y} onClick={() => handleCardClick(card.id)} isCurrent={card.id === currentCardId} isActive={hoveredCard?.id === card.id} onHover={handleCardHover} radius={radius} />
+            return <TreeNode 
+              key={card.id} 
+              card={card} 
+              x={pos.x} 
+              y={pos.y} 
+              onClick={() => handleCardClick(card.id)} 
+              isCurrent={card.id === currentCardId} 
+              isActive={hoveredCard?.id === card.id} 
+              onHover={handleCardHover} 
+              radius={radius} 
+              layoutMode={layoutMode} // Pass layoutMode down to TreeNode
+            />
           })}
         </svg>
       </div>
