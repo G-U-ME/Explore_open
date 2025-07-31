@@ -88,9 +88,7 @@ const SortableProjectItem: React.FC<{
     clearTimeout(pressTimer.current);
   };
   
-  // --- FIX: Create a correctly typed wrapper for onKeyDown ---
   const handleKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
-    // Safely call dnd-kit's keyboard handler
     listeners?.onKeyDown?.(e);
   };
 
@@ -99,7 +97,6 @@ const SortableProjectItem: React.FC<{
       ref={setNodeRef}
       style={style}
       {...attributes}
-      // Use the correctly typed wrapper function
       onKeyDown={handleKeyDown} 
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
@@ -165,7 +162,6 @@ export const ProjectPanel: React.FC<{ isMobile: boolean }> = ({ isMobile }) => {
   const [renamingProjectId, setRenamingProjectId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState('');
 
-  // On mobile, content is always shown. On desktop, it depends on the collapsed state.
   const shouldShowContent = isMobile || !isLeftPanelCollapsed;
 
   const sensors = useSensors(
@@ -175,7 +171,6 @@ export const ProjectPanel: React.FC<{ isMobile: boolean }> = ({ isMobile }) => {
       },
     }),
     useSensor(TouchSensor, {
-      // 手指需要按住 250ms 才能激活拖拽，这是移动端常见的交互
       activationConstraint: {
         delay: 250,
         tolerance: 5,
@@ -228,7 +223,6 @@ export const ProjectPanel: React.FC<{ isMobile: boolean }> = ({ isMobile }) => {
   };
 
   const handlePanelClick = () => {
-    // On desktop, clicking the collapsed panel should expand it.
     if (!isMobile && isLeftPanelCollapsed) {
       toggleLeftPanel();
     }
@@ -242,12 +236,12 @@ export const ProjectPanel: React.FC<{ isMobile: boolean }> = ({ isMobile }) => {
   return (
     <div 
       className={`h-full flex flex-col text-white relative z-10 overflow-hidden ${
-        // Replicate old design: transparent on desktop. Mobile BG is handled by parent.
         !isMobile ? 'bg-transparent' : ''
       } ${(isLeftPanelCollapsed && !isMobile) ? 'cursor-pointer' : ''}`}
       onClick={handlePanelClick}
     >
-      <div className={`flex-1 flex flex-col py-6 transition-all duration-300 ${(!isMobile && isLeftPanelCollapsed) ? 'px-3' : 'px-4'}`}>
+      {/* Section 1: Top Controls Area (Fixed Height) */}
+      <div className={`flex-shrink-0 py-6 transition-all duration-300 ${(!isMobile && isLeftPanelCollapsed) ? 'px-3' : 'px-4'}`}>
         <div className={`flex items-center self-start ${(!isMobile && isLeftPanelCollapsed) ? 'mb-0' : 'mb-6'} ${shouldShowContent ? 'space-x-2' : ''}`}>
           <button
             onClick={handleToggleClick}
@@ -264,9 +258,15 @@ export const ProjectPanel: React.FC<{ isMobile: boolean }> = ({ isMobile }) => {
             </button>
           )}
         </div>
+      </div>
 
+      {/* --- FIX START --- */}
+      {/* Section 2: Project List Area (Scrollable & Flexible Height) */}
+      {/* Added [direction:rtl] to move the scrollbar to the left */}
+      <div className={`flex-1 overflow-y-auto transition-all duration-300 [direction:rtl] ${(!isMobile && isLeftPanelCollapsed) ? 'px-3' : 'px-4'}`}>
         {shouldShowContent && (
-          <div className="w-full max-w-xs space-y-2 self-center">
+          /* Added [direction:ltr] to reset content direction to normal */
+          <div className="w-full max-w-xs space-y-2 self-center mx-auto [direction:ltr]">
             {showNewProject && (
               <div className="p-3 bg-[#4C4C4C] rounded-xl mb-4">
                 <input
@@ -304,7 +304,7 @@ export const ProjectPanel: React.FC<{ isMobile: boolean }> = ({ isMobile }) => {
                 items={projects.map(p => p.id)}
                 strategy={verticalListSortingStrategy}
               >
-                <div className="space-y-2">
+                <div className="space-y-2 pb-4">
                   {projects.map(project => (
                     <SortableProjectItem
                       key={project.id}
@@ -332,9 +332,11 @@ export const ProjectPanel: React.FC<{ isMobile: boolean }> = ({ isMobile }) => {
           </div>
         )}
       </div>
+      {/* --- FIX END --- */}
 
+      {/* Section 3: Bottom Account/Settings Area (Fixed Height) */}
       {shouldShowContent && (
-        <div className="p-4 relative z-10">
+        <div className="flex-shrink-0 p-4 relative z-10">
           <div className="flex items-center justify-between">
             <button className="flex items-center gap-3 p-2 rounded-lg hover:bg-[#333] transition-colors">
               <div className="w-7 h-7 rounded-full border-2 border-white" />
