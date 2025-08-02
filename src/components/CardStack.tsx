@@ -936,7 +936,35 @@ export const CardStack: React.FC<{
   }, [apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, appendMessage, updateMessage]);
 
   const handleTermClick = (term: string, rect: DOMRect) => {
-    setPreviewState({ visible: true, isLoading: true, sourceTerm: term, content: '', top: rect.top + rect.height / 2, left: rect.right });
+    // Calculate preview card dimensions and position
+    const previewCardWidth = currentCardRef.current ? currentCardRef.current.offsetWidth / 2 : 300;
+    const screenWidth = window.innerWidth;
+    const horizontalOffset = 10; // from PreviewCard's transform: 'translate(10px, ...)'
+    const screenPadding = 16; // Desired space from the right edge of the screen
+
+    // Initial desired position: to the right of the clicked term
+    let finalLeft = rect.right;
+    
+    // Calculate the projected right edge of the preview card
+    const projectedRightEdge = finalLeft + horizontalOffset + previewCardWidth;
+
+    // Check if it goes off-screen and adjust if necessary
+    if (projectedRightEdge > screenWidth - screenPadding) {
+      // The goal is for the final right edge to be at `screenWidth - screenPadding`.
+      // We solve for `finalLeft`: finalLeft + horizontalOffset + previewCardWidth = screenWidth - screenPadding
+      finalLeft = screenWidth - screenPadding - previewCardWidth - horizontalOffset;
+    }
+
+    const finalTop = rect.top + rect.height / 2;
+
+    setPreviewState({ 
+      visible: true, 
+      isLoading: true, 
+      sourceTerm: term, 
+      content: '', 
+      top: finalTop, 
+      left: finalLeft 
+    });
     fetchAIForPreview(term);
   };
   
