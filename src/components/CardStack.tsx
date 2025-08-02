@@ -404,8 +404,13 @@ const ParentCard: React.FC<{
 // #region Combined Animation Hook
 // ================================================================================================
 
+// ================================================================================================
+// #region Combined Animation Hook
+// ================================================================================================
+
 const useAnimation = (
     currentCardId: string | null,
+    cards: CardData[],
     getCardPath: (id: string) => CardData[],
     dimensions: Dimensions,
     navigationAction: React.MutableRefObject<NavigationAction>
@@ -413,6 +418,7 @@ const useAnimation = (
     const [animatingCards, setAnimatingCards] = useState<AnimatedCard[]>([]);
     const [isAnimating, setIsAnimating] = useState(false);
     const prevCardId = usePrevious(currentCardId);
+    const prevCards = usePrevious(cards);
     const animationSleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
     const runNewStyleAnimation = useCallback(async (
@@ -564,18 +570,15 @@ const useAnimation = (
             let initialTransform = `translate(-50%, -50%) rotate(${initialPos.rotation}deg) scale(${initialPos.scale})`;
             let delay = '0ms';
             
-            // Explicitly use the 'type' parameter to determine animation logic
             if (type === 'SWITCH_TO_PARENT') {
                 const exitingCardCount = fromPath.length - toPath.length;
                 const maxExitStaggerDelay = Math.max(0, (exitingCardCount - 1) * STAGGER_DELAY_MS);
                 
                 if (isExiting) {
                     status = 'exiting-fly-up-right';
-                    // The front-most exiting card (oldDepth=0) goes first (delay=0), peeling off sequentially.
                     const exitRank = oldDepth;
                     delay = `${exitRank * STAGGER_DELAY_MS}ms`;
-                } else { // This is a moving card
-                    // It should wait for the exiting cards to finish their stagger, then start its own stagger.
+                } else { 
                     const lastRemainingCardOldIdx = toPath.length - 1;
                     const delaySteps = lastRemainingCardOldIdx - oldIdx;
                     const moveStaggerDelay = delaySteps * STAGGER_DELAY_MS;
@@ -584,17 +587,13 @@ const useAnimation = (
             } else if (type === 'SWITCH_TO_CHILD') {
                 if (isEntering) {
                     status = 'entering';
-                    // New cards fly in one by one.
-                    const enterRank = newIdx - fromPath.length; // 0 for the first new card, 1 for the second...
+                    const enterRank = newIdx - fromPath.length;
                     delay = `${enterRank * STAGGER_DELAY_MS}ms`;
                     initialTransform = `translate(-40%, -55%) scale(1.2) rotate(5deg)`;
-                } else { // This is a moving card
-                    // Existing cards move back simultaneously as the new ones start entering.
+                } else {
                     delay = '0ms'; 
                 }
             } else {
-                // Fallback to the original generic logic for unhandled or complex cases (e.g., SWITCH_SIBLING).
-                // This logic is robust and can handle both advancing and retreating stacks.
                 const numSteps = fromPath.length - toPath.length;
                 let exitPhaseDuration = 0;
                 if (numSteps > 0) {
@@ -612,7 +611,7 @@ const useAnimation = (
                     status = 'exiting-fly-up-right';
                     const exitRank = oldDepth;
                     delay = `${exitRank * STAGGER_DELAY_MS}ms`;
-                } else { // This is for cards that remain on screen and move
+                } else {
                     let moveStaggerDelay = 0;
                     if (numSteps > 0) {
                         const lastRemainingCardOldIdx = toPath.length - 1;
@@ -644,7 +643,6 @@ const useAnimation = (
             setAnimatingCards(current => current.map(animatingCard => {
                 const state = cardStates.find(s => s.id === animatingCard.id);
                 if (!state) return animatingCard;
-                // For exiting cards, the status change triggers the animation. For others, the style change triggers the transition.
                 if (state.isExiting) return { ...animatingCard, status: state.status };
                 return { ...animatingCard, style: state.finalStyle, status: 'stable-moving' };
             }));
@@ -681,13 +679,43 @@ const useAnimation = (
             return;
         }
 
-        const oldPath = getCardPath(prevCardId);
+        // MODIFICATION: This helper function is now type-safe.
+        const getPathFromCardList = (id: string, cardList: CardData[]): CardData[] => {
+            const path: CardData[] = [];
+            if (!cardList) return path;
+
+            // Start with the initial card, which might not be found.
+            let currentCard: CardData | undefined = cardList.find(c => c.id === id);
+
+            // Loop as long as we have a valid card.
+            while (currentCard) {
+                // Add the valid card to the path.
+                path.unshift(currentCard);
+                
+                // Get its parent's ID.
+                const parentId = currentCard.parentId;
+                
+                // If there's no parent, we've reached the root, so we stop.
+                if (!parentId) {
+                    break;
+                }
+                
+                // Find the parent card in the list for the next iteration.
+                // This will be `undefined` if the parent isn't in the list,
+                // which will correctly terminate the loop.
+                currentCard = cardList.find(c => c.id === parentId);
+            }
+            
+            return path;
+        };
+
+        const oldPath = getPathFromCardList(prevCardId, prevCards || []);
         const newPath = getCardPath(currentCardId);
+        
         const isPrefix = (shortPath: CardData[], longPath: CardData[]) => shortPath.length < longPath.length && shortPath.every((card, index) => card.id === longPath[index]?.id);
 
         let animationType: string;
-        if (navigationAction.current === 'delete') animationType = 'DELETE';
-        else if (navigationAction.current === 'create') animationType = 'CREATE_CHILD';
+        if (navigationAction.current === 'create') animationType = 'CREATE_CHILD';
         else if (isPrefix(oldPath, newPath)) animationType = 'SWITCH_TO_CHILD';
         else if (isPrefix(newPath, oldPath)) animationType = 'SWITCH_TO_PARENT';
         else if (oldPath.length > 0 && newPath.length > 0 && oldPath[oldPath.length - 1].parentId === newPath[newPath.length - 1].parentId) animationType = 'SWITCH_SIBLING';
@@ -704,13 +732,10 @@ const useAnimation = (
                     const distance = commonAncestorId ? (oldPath.length - ancestorPath.length) + (newPath.length - ancestorPath.length) : 99;
 
                     if (!commonAncestorId) {
-                        // No common ground, just dissolve everything from old path.
                         await runNewStyleAnimation(oldPath, [], 'DELETE');
                     } else {
-                        // Two-phase animation: 1. Retreat to ancestor, 2. Advance to target.
                         const useOldStyle = distance > 3;
 
-                        // Phase 1: Retreat from oldPath to ancestorPath
                         if (useOldStyle) {
                             const duration = runOldStyleAnimation(oldPath, ancestorPath, 'SWITCH_TO_PARENT');
                             await animationSleep(duration);
@@ -718,7 +743,6 @@ const useAnimation = (
                             await runNewStyleAnimation(oldPath, ancestorPath, 'SWITCH_TO_PARENT');
                         }
 
-                        // Phase 2: Advance from ancestorPath to newPath
                         if (useOldStyle) {
                             const duration = runOldStyleAnimation(ancestorPath, newPath, 'SWITCH_TO_CHILD');
                             await animationSleep(duration);
@@ -727,7 +751,6 @@ const useAnimation = (
                         }
                     }
                 } else {
-                    // Handle all other one-phase animations
                     const distance = Math.abs(newPath.length - oldPath.length);
                     const useOldStyle = distance > 3 && animationType.startsWith('SWITCH');
 
@@ -746,7 +769,7 @@ const useAnimation = (
 
         runAnimation();
 
-    }, [currentCardId, getCardPath, dimensions, navigationAction, isAnimating, prevCardId, runNewStyleAnimation, runOldStyleAnimation]);
+    }, [currentCardId, cards, getCardPath, dimensions, navigationAction, isAnimating, prevCardId, prevCards, runNewStyleAnimation, runOldStyleAnimation]);
 
     return animatingCards;
 };
@@ -765,7 +788,7 @@ export const CardStack: React.FC<{
 }> = ({ centerY, availableHeight, centerAreaWidth, isMobile = false }) => {
   const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle, appendMessage, updateMessage } = useCardStore();
   const { projects, activeProjectId } = useProjectStore();
-  const { apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt } = useSettingsStore();
+  const { apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, isWebSearchEnabled } = useSettingsStore();
 
   const [hoveredCardId, setHoveredCardId] = useState<string | null>(null);
 
@@ -798,7 +821,7 @@ export const CardStack: React.FC<{
     };
   }, [centerAreaWidth, centerY, availableHeight, isMobile]);
 
-  const animatedCards = useAnimation(currentCardId, getCardPath, dimensions, navigationAction);
+  const animatedCards = useAnimation(currentCardId, cards, getCardPath, dimensions, navigationAction);
 
   useEffect(() => { setPortalRoot(document.getElementById('portal-root')); }, []);
   useEffect(() => {
@@ -832,10 +855,16 @@ export const CardStack: React.FC<{
     let handedOffTarget: { cardId: string; messageId: string } | null = null;
 
     try {
+      const requestBody: any = { model: activeModel, messages, stream: true };
+      if (isWebSearchEnabled) {
+        requestBody.enable_search = true;
+        requestBody.search_options = { provider: "biying" };
+      }
+      
       const res = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
-        body: JSON.stringify({ model: activeModel, messages, stream: true }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal,
       });
 

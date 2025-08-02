@@ -6,6 +6,7 @@ export interface SettingsState {
   apiKey: string;
   models: string[];
   activeModel: string;
+  isWebSearchEnabled: boolean; // <--- 新增
   // 系统提示词
   globalSystemPrompt: string;
   dialogueSystemPrompt: string;
@@ -17,6 +18,7 @@ export interface SettingsState {
   setApiKey: (key: string) => void;
   setModels: (models: string[]) => void;
   setActiveModel: (model: string) => void;
+  setIsWebSearchEnabled: (enabled: boolean) => void; // <--- 新增
   // 修改系统提示词的 action
   setGlobalSystemPrompt: (prompt: string) => void;
   setDialogueSystemPrompt: (prompt: string) => void;
@@ -32,6 +34,7 @@ export const useSettingsStore = create<SettingsState>((set) => {
     apiKey: 'sk-jsAsaJV0SCTcNhlVlkjt9pZN1x0KNS27Dn9oZJqDHdaVTwBG',
     models: initialModels,
     activeModel: initialModels[0] || '',
+    isWebSearchEnabled: false, // <--- 新增
     
     // 初始化系统提示词
     globalSystemPrompt: '', // 默认与“汉语”选项一致
@@ -48,6 +51,7 @@ export const useSettingsStore = create<SettingsState>((set) => {
       return { models, activeModel: newActiveModel };
     }),
     setActiveModel: (model) => set({ activeModel: model }),
+    setIsWebSearchEnabled: (enabled) => set({ isWebSearchEnabled: enabled }), // <--- 新增
     
     // 实现 action
     setGlobalSystemPrompt: (prompt) => set({ globalSystemPrompt: prompt }),

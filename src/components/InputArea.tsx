@@ -33,13 +33,12 @@ export const InputArea: React.FC = () => {
   const cards = activeProject?.cards || [];
   const currentCardId = activeProject?.currentCardId || null;
 
-  const { apiUrl, apiKey, models, activeModel, setActiveModel } = useSettingsStore();
+  const { apiUrl, apiKey, models, activeModel, setActiveModel, isWebSearchEnabled, setIsWebSearchEnabled } = useSettingsStore();
 
   const [inputText, setInputText] = useState('');
   const [filePreviews, setFilePreviews] = useState<FilePreview[]>([]);
   const [isTyping, setLocalIsTyping] = useState(false);
   const [showModelDropdown, setShowModelDropdown] = useState(false);
-  const [isWebSearchEnabled, setIsWebSearchEnabled] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
