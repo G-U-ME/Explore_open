@@ -759,7 +759,6 @@ export const CardStack: React.FC<{
   centerAreaWidth: number;
   isMobile?: boolean;
 }> = ({ centerY, availableHeight, centerAreaWidth, isMobile = false }) => {
-  // MODIFICATION: Add `appendMessage` and `updateMessage` for streaming AI responses
   const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle, appendMessage, updateMessage } = useCardStore();
   const { projects, activeProjectId } = useProjectStore();
   const { apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt } = useSettingsStore();
@@ -778,6 +777,10 @@ export const CardStack: React.FC<{
   const navigationAction = useRef<NavigationAction>(null);
   const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: '' });
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
+  const previewAbortControllerRef = useRef<AbortController | null>(null);
+  const streamTargetRef = useRef<{type: 'preview' | 'card', cardId?: string, messageId?: string} | null>(null);
+
+  
 
   const dimensions = useMemo<Dimensions>(() => {
     const scaleFactor = isMobile ? 0.90 : 0.75;
@@ -803,6 +806,10 @@ export const CardStack: React.FC<{
   }, [currentCardId, currentCard?.messages.length, currentCard?.title, generateTitle, lastMessageContent]);
   
   const fetchAIForPreview = async (term: string) => {
+    // This function no longer needs to manage aborting previous requests itself.
+    const controller = new AbortController();
+    previewAbortControllerRef.current = controller;
+
     if (!apiUrl || !apiKey || !activeModel) {
       setPreviewState((prev) => ({ ...prev, content: "API settings are missing.", isLoading: false }));
       return;
@@ -820,6 +827,7 @@ export const CardStack: React.FC<{
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify({ model: activeModel, messages, stream: true }),
+        signal: controller.signal,
       });
 
       if (!res.ok || !res.body) {
@@ -852,7 +860,16 @@ export const CardStack: React.FC<{
             if (delta) {
               aiContent += delta;
               const normalizedContent = normalizeMathDelimiters(aiContent);
-              setPreviewState((prev) => ({ ...prev, content: normalizedContent, isLoading: false }));
+              
+              if (controller.signal.aborted) break mainReadLoop;
+
+              // Only update state if the stream target is still the preview.
+              if (streamTargetRef.current?.type === 'preview') {
+                  setPreviewState((prev) => ({ ...prev, content: normalizedContent, isLoading: false }));
+              } else if (streamTargetRef.current?.type === 'card') {
+                  // This handles the case where the user creates a card from the preview.
+                  updateMessage(streamTargetRef.current.cardId!, streamTargetRef.current.messageId!, { content: normalizedContent });
+              }
             }
           } catch (e) {
             console.warn('Stream parsing error:', e);
@@ -860,18 +877,38 @@ export const CardStack: React.FC<{
         }
       }
     } catch (error) {
-      console.error("Preview fetch error:", error);
-      setPreviewState((prev) => ({ ...prev, content: "Failed to fetch explanation.", isLoading: false }));
+        if (error instanceof Error && error.name === 'AbortError') {
+            console.log('Preview fetch was aborted.');
+        } else {
+            console.error("Preview fetch error:", error);
+            if (!controller.signal.aborted) {
+                setPreviewState((prev) => ({ ...prev, content: "Failed to fetch explanation.", isLoading: false }));
+            }
+        }
     } finally {
-      setPreviewState((prev) => ({ ...prev, isLoading: false }));
+        // No need to nullify the ref here, the useEffect handles the lifecycle.
     }
   };
 
-  // MODIFICATION: Add the streaming logic, adapted from InputArea.tsx
-  const fetchLLMStreamForNewCard = useCallback(async (cardId: string, history: CardMessage[], userMsgId?: string) => {
-    const aiMsgId = userMsgId ? `${userMsgId}_ai` : `msg_${Date.now()}_ai`;
+  const fetchLLMStreamForNewCard = useCallback(async (
+    cardId: string, 
+    history: CardMessage[], 
+    targetMessageInfo?: { aiMessageIdToContinue: string } | { userMessageId: string }
+  ) => {
+    let aiMsgId: string;
+    let initialContent = '';
 
-    appendMessage(cardId, { id: aiMsgId, role: 'ai', content: '', timestamp: Date.now() });
+    if (targetMessageInfo && 'aiMessageIdToContinue' in targetMessageInfo) {
+        aiMsgId = targetMessageInfo.aiMessageIdToContinue;
+        const existingMsg = history.find(m => m.id === aiMsgId);
+        if (existingMsg) {
+            initialContent = existingMsg.content;
+        }
+    } else {
+        const userMsgId = targetMessageInfo?.userMessageId;
+        aiMsgId = userMsgId ? `${userMsgId}_ai` : `msg_${Date.now()}_ai`;
+        appendMessage(cardId, { id: aiMsgId, role: 'ai', content: '', timestamp: Date.now() });
+    }
 
     if (!apiUrl || !apiKey || !activeModel) {
         updateMessage(cardId, aiMsgId, { content: "API settings are missing." });
@@ -904,7 +941,7 @@ export const CardStack: React.FC<{
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        let aiContent = '';
+        let aiContent = initialContent; // Start with existing content if any
         mainReadLoop: while (true) {
             const { value, done } = await reader.read();
             if (done) break;
@@ -931,41 +968,50 @@ export const CardStack: React.FC<{
         }
     } catch (error) {
         console.error("LLM fetch error:", error);
-        updateMessage(cardId, aiMsgId, { content: "Failed to fetch AI response." });
+        updateMessage(cardId, aiMsgId, { content: initialContent + "\n\nFailed to fetch AI response." });
     }
   }, [apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, appendMessage, updateMessage]);
 
   const handleTermClick = (term: string, rect: DOMRect) => {
+    // This function now ONLY sets the state. The useEffect will handle the fetching.
+    
     // Calculate preview card dimensions and position
     const previewCardWidth = currentCardRef.current ? currentCardRef.current.offsetWidth / 2 : 300;
     const screenWidth = window.innerWidth;
     const horizontalOffset = 10; // from PreviewCard's transform: 'translate(10px, ...)'
     const screenPadding = 16; // Desired space from the right edge of the screen
 
-    // Initial desired position: to the right of the clicked term
     let finalLeft = rect.right;
-    
-    // Calculate the projected right edge of the preview card
     const projectedRightEdge = finalLeft + horizontalOffset + previewCardWidth;
 
-    // Check if it goes off-screen and adjust if necessary
     if (projectedRightEdge > screenWidth - screenPadding) {
-      // The goal is for the final right edge to be at `screenWidth - screenPadding`.
-      // We solve for `finalLeft`: finalLeft + horizontalOffset + previewCardWidth = screenWidth - screenPadding
       finalLeft = screenWidth - screenPadding - previewCardWidth - horizontalOffset;
     }
 
     const finalTop = rect.top + rect.height / 2;
-
-    setPreviewState({ 
-      visible: true, 
-      isLoading: true, 
-      sourceTerm: term, 
-      content: '', 
-      top: finalTop, 
-      left: finalLeft 
+    
+    // Set the state to trigger the useEffect.
+    // If the same term is clicked, we ensure `visible` toggles to force a re-fetch if needed.
+    // For a new term, it will always trigger.
+    setPreviewState(prevState => {
+      if (prevState.sourceTerm === term && prevState.visible) {
+        // Optional: if you want clicking the same term to close it.
+        return { ...prevState, visible: false, sourceTerm: '' };
+      }
+      return { 
+        visible: true, 
+        isLoading: true, 
+        sourceTerm: term, 
+        content: '', 
+        top: finalTop, 
+        left: finalLeft 
+      };
     });
-    fetchAIForPreview(term);
+  };
+  
+  const handleClosePreview = () => {
+    // This function also just sets the state. The useEffect cleanup will handle the abort.
+    setPreviewState(p => ({...p, visible: false, sourceTerm: ''}));
   };
   
   const handleCreateCard = (messages: CardMessage[], parentId?: string) => {
@@ -974,14 +1020,40 @@ export const CardStack: React.FC<{
   };
 
   const handleCreateFromPreview = () => {
-    if (!previewState.sourceTerm || !previewState.content) return;
+    if (!previewState.sourceTerm) return;
+    
+    // Do NOT abort the stream. We will re-target its output to the new card.
+    
+    navigationAction.current = 'create';
     const userMsg: CardMessage = { id: `msg_${Date.now()}_user`, role: 'user', content: previewState.sourceTerm, timestamp: Date.now() };
     const aiMsg: CardMessage = { id: `msg_${Date.now()}_ai`, role: 'ai', content: previewState.content, timestamp: Date.now() };
-    handleCreateCard([userMsg, aiMsg], currentCardId || undefined);
+    
+    // Create the card with the partial content we have so far.
+    addCard([userMsg, aiMsg], currentCardId || undefined);
+    
+    // Close the preview UI.
     setPreviewState(p => ({...p, visible: false}));
+
+    // Get the new card's ID so we can target it.
+    const { projects, activeProjectId } = useProjectStore.getState();
+    const activeProject = projects.find(p => p.id === activeProjectId);
+    const newCardId = activeProject?.currentCardId;
+
+    if (newCardId) {
+      // Switch the stream's target to the newly created card and message.
+      // The ongoing fetchAIForPreview loop will see this change and start calling
+      // updateMessage instead of setPreviewState.
+      streamTargetRef.current = { type: 'card', cardId: newCardId, messageId: aiMsg.id };
+    } else {
+      // If something went wrong and we couldn't get the new card ID,
+      // we should abort the stream to prevent it from running orphaned.
+      if (previewAbortControllerRef.current) {
+        previewAbortControllerRef.current.abort();
+        previewAbortControllerRef.current = null;
+      }
+    }
   };
 
-  // MODIFICATION: Update this handler to trigger the AI stream.
   const handleCreateFromSelection = () => {
     if (!selectedContent) return;
     navigationAction.current = 'create';
@@ -993,20 +1065,17 @@ export const CardStack: React.FC<{
       timestamp: Date.now() 
     };
     
-    // 1. Create the card with the user's message. This also sets it as the active card.
     addCard([userMsg], currentCardId || undefined);
     setSelectedContent(null);
 
-    // 2. Get the new state to find the ID and history of the just-created card.
     const { projects, activeProjectId } = useProjectStore.getState();
     const activeProject = projects.find(p => p.id === activeProjectId);
     const newCardId = activeProject?.currentCardId;
     const newCard = activeProject?.cards.find(c => c.id === newCardId);
 
-    // 3. If the card was created successfully, trigger the AI stream for it.
     if (newCardId && newCard) {
-      // This is a fire-and-forget call. The UI will update as the stream arrives.
-      fetchLLMStreamForNewCard(newCardId, newCard.messages, userMsg.id);
+      // Pass user message ID to create a new AI message
+      fetchLLMStreamForNewCard(newCardId, newCard.messages, { userMessageId: userMsg.id });
     }
   };
   
@@ -1034,6 +1103,39 @@ export const CardStack: React.FC<{
           };
       });
   }, [animatedCards, currentCardId, prevCardId, getCardPath, dimensions, cards]);
+
+
+    // This useEffect now centrally manages the lifecycle of the preview fetch.
+  useEffect(() => {
+    // If the preview is not supposed to be visible or has no term, do nothing.
+    if (!previewState.visible || !previewState.sourceTerm) {
+      // Ensure any lingering request is cancelled if the card becomes invisible.
+      if (previewAbortControllerRef.current) {
+        previewAbortControllerRef.current.abort();
+      }
+      return;
+    }
+
+    // A new fetch is required.
+    // The cleanup function from the PREVIOUS render has already run,
+    // aborting the old request.
+
+    // Set the stream's target to the preview window.
+    streamTargetRef.current = { type: 'preview' };
+    
+    // Start the new fetch.
+    fetchAIForPreview(previewState.sourceTerm);
+
+    // The cleanup function is the key. It will run when:
+    // 1. The component unmounts.
+    // 2. The dependencies ([previewState.visible, previewState.sourceTerm]) change
+    //    BEFORE the effect runs again.
+    return () => {
+      if (previewAbortControllerRef.current) {
+        previewAbortControllerRef.current.abort();
+      }
+    };
+  }, [previewState.visible, previewState.sourceTerm]); // Re-run effect when visibility or term changes.
 
   return (
     <div className="w-full h-full relative overflow-visible z-0">
@@ -1123,7 +1225,7 @@ export const CardStack: React.FC<{
           position={{ top: previewState.top, left: previewState.left }}
           content={previewState.content}
           isLoading={previewState.isLoading}
-          onClose={() => setPreviewState(p => ({...p, visible: false}))}
+          onClose={handleClosePreview}
           onCreate={handleCreateFromPreview}
           parentRef={currentCardRef}
         />,
