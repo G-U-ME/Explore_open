@@ -177,7 +177,9 @@ const MarkdownRenderer: React.FC<{
   content: string; 
   onTermClick?: (term: string, rect: DOMRect) => void;
 }> = React.memo(({ content, onTermClick }) => {
-  const customComponents: Components = {
+  // MODIFICATION: Memoize the customComponents object.
+  // It will only be recalculated if onTermClick changes.
+  const customComponents: Components = useMemo(() => ({
     span: ({ node, children, ...props }: CustomSpanProps) => {
       if (props.className === 'conceptual-term') {
         const term = React.Children.toArray(children).join('');
@@ -198,7 +200,8 @@ const MarkdownRenderer: React.FC<{
       }
       return <span {...props}>{children}</span>;
     },
-  };
+  }), [onTermClick]); // Dependency array includes onTermClick
+
   const normalizedContent = useMemo(() => normalizeMathDelimiters(content), [content]);
   return (
     <div className="markdown-content w-full">
@@ -212,6 +215,7 @@ const MarkdownRenderer: React.FC<{
     </div>
   );
 });
+
 
 const PreviewCard: React.FC<{
   position: { top: number; left: number };
@@ -773,14 +777,15 @@ export const CardStack: React.FC<{
   const lastMessageContent = currentCard?.messages?.[currentCard.messages.length - 1]?.content;
   const prevCardId = usePrevious(currentCardId);
 
-  const currentCardRef = useRef<HTMLDivElement>(null);
+  const currentCardRef = useRef<HTMLDivElement>(null); 
+  const streamTargetRef = useRef<{type: 'preview' | 'card', cardId?: string, messageId?: string} | null>(null);
+  const lettingStreamContinueRef = useRef(false); // MODIFICATION: Added ref to manage stream handoff.
+
   const navigationAction = useRef<NavigationAction>(null);
   const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: '' });
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
-  const previewAbortControllerRef = useRef<AbortController | null>(null);
-  const streamTargetRef = useRef<{type: 'preview' | 'card', cardId?: string, messageId?: string} | null>(null);
+  const streamAbortControllerRef = useRef<AbortController | null>(null);
 
-  
 
   const dimensions = useMemo<Dimensions>(() => {
     const scaleFactor = isMobile ? 0.90 : 0.75;
@@ -808,7 +813,7 @@ export const CardStack: React.FC<{
   const fetchAIForPreview = async (term: string) => {
     // This function no longer needs to manage aborting previous requests itself.
     const controller = new AbortController();
-    previewAbortControllerRef.current = controller;
+    streamAbortControllerRef.current = controller;
 
     if (!apiUrl || !apiKey || !activeModel) {
       setPreviewState((prev) => ({ ...prev, content: "API settings are missing.", isLoading: false }));
@@ -821,6 +826,10 @@ export const CardStack: React.FC<{
       messages.push({ role: 'system', content: systemPromptContent });
     }
     messages.push({ role: 'user', content: userPrompt });
+
+    // Local state to "latch" the stream's target once it's handed off to a card.
+    let isHandedOff = false;
+    let handedOffTarget: { cardId: string; messageId: string } | null = null;
 
     try {
       const res = await fetch(apiUrl, {
@@ -863,12 +872,23 @@ export const CardStack: React.FC<{
               
               if (controller.signal.aborted) break mainReadLoop;
 
-              // Only update state if the stream target is still the preview.
-              if (streamTargetRef.current?.type === 'preview') {
+              // If the stream has been handed off, it sticks to its card target
+              // and ignores any subsequent changes to the global streamTargetRef.
+              if (isHandedOff && handedOffTarget) {
+                  updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, { content: normalizedContent });
+              }
+              // Before handoff, it updates the preview.
+              else if (streamTargetRef.current?.type === 'preview') {
                   setPreviewState((prev) => ({ ...prev, content: normalizedContent, isLoading: false }));
-              } else if (streamTargetRef.current?.type === 'card') {
-                  // This handles the case where the user creates a card from the preview.
-                  updateMessage(streamTargetRef.current.cardId!, streamTargetRef.current.messageId!, { content: normalizedContent });
+              }
+              // This is the moment of handoff. Latch the target and switch behavior.
+              else if (streamTargetRef.current?.type === 'card') {
+                  isHandedOff = true;
+                  handedOffTarget = {
+                      cardId: streamTargetRef.current.cardId!,
+                      messageId: streamTargetRef.current.messageId!
+                  };
+                  updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, { content: normalizedContent });
               }
             }
           } catch (e) {
@@ -881,7 +901,8 @@ export const CardStack: React.FC<{
             console.log('Preview fetch was aborted.');
         } else {
             console.error("Preview fetch error:", error);
-            if (!controller.signal.aborted) {
+            // Only show an error in the preview if the stream was never handed off.
+            if (!controller.signal.aborted && !isHandedOff) {
                 setPreviewState((prev) => ({ ...prev, content: "Failed to fetch explanation.", isLoading: false }));
             }
         }
@@ -895,6 +916,13 @@ export const CardStack: React.FC<{
     history: CardMessage[], 
     targetMessageInfo?: { aiMessageIdToContinue: string } | { userMessageId: string }
   ) => {
+    // Abort any previously running stream before starting a new one.
+    if (streamAbortControllerRef.current) {
+        streamAbortControllerRef.current.abort();
+    }
+    const controller = new AbortController();
+    streamAbortControllerRef.current = controller;
+
     let aiMsgId: string;
     let initialContent = '';
 
@@ -909,6 +937,8 @@ export const CardStack: React.FC<{
         aiMsgId = userMsgId ? `${userMsgId}_ai` : `msg_${Date.now()}_ai`;
         appendMessage(cardId, { id: aiMsgId, role: 'ai', content: '', timestamp: Date.now() });
     }
+    
+    streamTargetRef.current = { type: 'card', cardId, messageId: aiMsgId };
 
     if (!apiUrl || !apiKey || !activeModel) {
         updateMessage(cardId, aiMsgId, { content: "API settings are missing." });
@@ -931,6 +961,7 @@ export const CardStack: React.FC<{
             method: 'POST',
             headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
             body: JSON.stringify({ model: activeModel, stream: true, messages: messagesForApi }),
+            signal: controller.signal,
         });
 
         if (!res.ok || !res.body) {
@@ -941,8 +972,9 @@ export const CardStack: React.FC<{
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        let aiContent = initialContent; // Start with existing content if any
+        let aiContent = initialContent;
         mainReadLoop: while (true) {
+            if (controller.signal.aborted) break;
             const { value, done } = await reader.read();
             if (done) break;
             buffer += decoder.decode(value, { stream: true });
@@ -967,19 +999,27 @@ export const CardStack: React.FC<{
             }
         }
     } catch (error) {
-        console.error("LLM fetch error:", error);
-        updateMessage(cardId, aiMsgId, { content: initialContent + "\n\nFailed to fetch AI response." });
+      if (error instanceof Error && error.name === 'AbortError') {
+          console.log('LLM fetch for card was aborted.');
+      } else {
+          console.error("LLM fetch error:", error);
+          if (!controller.signal.aborted) {
+            updateMessage(cardId, aiMsgId, { content: initialContent + "\n\nFailed to fetch AI response." });
+          }
+      }
+    } finally {
+        if (streamAbortControllerRef.current === controller) {
+            streamAbortControllerRef.current = null;
+            streamTargetRef.current = null;
+        }
     }
   }, [apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, appendMessage, updateMessage]);
 
-  const handleTermClick = (term: string, rect: DOMRect) => {
-    // This function now ONLY sets the state. The useEffect will handle the fetching.
-    
-    // Calculate preview card dimensions and position
+  const handleTermClick = useCallback((term: string, rect: DOMRect) => {
     const previewCardWidth = currentCardRef.current ? currentCardRef.current.offsetWidth / 2 : 300;
     const screenWidth = window.innerWidth;
-    const horizontalOffset = 10; // from PreviewCard's transform: 'translate(10px, ...)'
-    const screenPadding = 16; // Desired space from the right edge of the screen
+    const horizontalOffset = 10;
+    const screenPadding = 16;
 
     let finalLeft = rect.right;
     const projectedRightEdge = finalLeft + horizontalOffset + previewCardWidth;
@@ -990,12 +1030,8 @@ export const CardStack: React.FC<{
 
     const finalTop = rect.top + rect.height / 2;
     
-    // Set the state to trigger the useEffect.
-    // If the same term is clicked, we ensure `visible` toggles to force a re-fetch if needed.
-    // For a new term, it will always trigger.
     setPreviewState(prevState => {
       if (prevState.sourceTerm === term && prevState.visible) {
-        // Optional: if you want clicking the same term to close it.
         return { ...prevState, visible: false, sourceTerm: '' };
       }
       return { 
@@ -1007,10 +1043,9 @@ export const CardStack: React.FC<{
         left: finalLeft 
       };
     });
-  };
+  }, [currentCardRef]);
   
   const handleClosePreview = () => {
-    // This function also just sets the state. The useEffect cleanup will handle the abort.
     setPreviewState(p => ({...p, visible: false, sourceTerm: ''}));
   };
   
@@ -1021,35 +1056,31 @@ export const CardStack: React.FC<{
 
   const handleCreateFromPreview = () => {
     if (!previewState.sourceTerm) return;
-    
-    // Do NOT abort the stream. We will re-target its output to the new card.
+
+    // MODIFICATION: Signal that the stream should not be aborted when the preview closes.
+    lettingStreamContinueRef.current = true;
     
     navigationAction.current = 'create';
     const userMsg: CardMessage = { id: `msg_${Date.now()}_user`, role: 'user', content: previewState.sourceTerm, timestamp: Date.now() };
     const aiMsg: CardMessage = { id: `msg_${Date.now()}_ai`, role: 'ai', content: previewState.content, timestamp: Date.now() };
     
-    // Create the card with the partial content we have so far.
     addCard([userMsg, aiMsg], currentCardId || undefined);
     
-    // Close the preview UI.
+    // Close the preview UI. This will trigger the useEffect's cleanup function.
     setPreviewState(p => ({...p, visible: false}));
 
-    // Get the new card's ID so we can target it.
     const { projects, activeProjectId } = useProjectStore.getState();
     const activeProject = projects.find(p => p.id === activeProjectId);
     const newCardId = activeProject?.currentCardId;
 
     if (newCardId) {
-      // Switch the stream's target to the newly created card and message.
-      // The ongoing fetchAIForPreview loop will see this change and start calling
-      // updateMessage instead of setPreviewState.
+      // Re-target the stream's output to the newly created card message.
       streamTargetRef.current = { type: 'card', cardId: newCardId, messageId: aiMsg.id };
     } else {
-      // If something went wrong and we couldn't get the new card ID,
-      // we should abort the stream to prevent it from running orphaned.
-      if (previewAbortControllerRef.current) {
-        previewAbortControllerRef.current.abort();
-        previewAbortControllerRef.current = null;
+      // Fallback: If we can't create the card, abort the orphaned stream.
+      if (streamAbortControllerRef.current) {
+        streamAbortControllerRef.current.abort();
+        streamAbortControllerRef.current = null;
       }
     }
   };
@@ -1074,13 +1105,22 @@ export const CardStack: React.FC<{
     const newCard = activeProject?.cards.find(c => c.id === newCardId);
 
     if (newCardId && newCard) {
-      // Pass user message ID to create a new AI message
       fetchLLMStreamForNewCard(newCardId, newCard.messages, { userMessageId: userMsg.id });
     }
   };
   
   const handleDelete = (id: string) => {
     navigationAction.current = 'delete';
+
+    // If the card being deleted is the target of an ongoing stream, abort it.
+    if (streamTargetRef.current?.type === 'card' && streamTargetRef.current.cardId === id) {
+      if (streamAbortControllerRef.current) {
+        streamAbortControllerRef.current.abort();
+        streamAbortControllerRef.current = null;
+      }
+      streamTargetRef.current = null;
+    }
+    
     deleteCardAndDescendants(id);
   };
 
@@ -1104,38 +1144,32 @@ export const CardStack: React.FC<{
       });
   }, [animatedCards, currentCardId, prevCardId, getCardPath, dimensions, cards]);
 
-
-    // This useEffect now centrally manages the lifecycle of the preview fetch.
+  // MODIFICATION: Updated useEffect to handle stream lifecycle correctly.
   useEffect(() => {
-    // If the preview is not supposed to be visible or has no term, do nothing.
     if (!previewState.visible || !previewState.sourceTerm) {
-      // Ensure any lingering request is cancelled if the card becomes invisible.
-      if (previewAbortControllerRef.current) {
-        previewAbortControllerRef.current.abort();
-      }
       return;
     }
 
     // A new fetch is required.
-    // The cleanup function from the PREVIOUS render has already run,
-    // aborting the old request.
-
-    // Set the stream's target to the preview window.
     streamTargetRef.current = { type: 'preview' };
-    
-    // Start the new fetch.
     fetchAIForPreview(previewState.sourceTerm);
 
-    // The cleanup function is the key. It will run when:
-    // 1. The component unmounts.
-    // 2. The dependencies ([previewState.visible, previewState.sourceTerm]) change
-    //    BEFORE the effect runs again.
+    // This cleanup function runs when the preview closes or a new term is clicked.
     return () => {
-      if (previewAbortControllerRef.current) {
-        previewAbortControllerRef.current.abort();
+      // If the handoff flag is set, the stream is being passed to a new card.
+      // Do NOT abort it. Just reset the flag for the next operation.
+      if (lettingStreamContinueRef.current) {
+        lettingStreamContinueRef.current = false;
+        return;
+      }
+      
+      // For all other cases, abort the stream and clean up the ref.
+      if (streamAbortControllerRef.current) {
+        streamAbortControllerRef.current.abort();
+        streamAbortControllerRef.current = null;
       }
     };
-  }, [previewState.visible, previewState.sourceTerm]); // Re-run effect when visibility or term changes.
+  }, [previewState.visible, previewState.sourceTerm]);
 
   return (
     <div className="w-full h-full relative overflow-visible z-0">
