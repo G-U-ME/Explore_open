@@ -30,7 +30,8 @@ type AnimationStatus =
   | 'exiting-dissolve'
   | 'exiting-fly-right'
   | 'exiting-fly-up-right'
-  | 'exiting-shrink-out';
+  | 'exiting-shrink-out'
+  | 'exiting-up-and-grow'; //  <-- 新增的删除动画状态
 
 type NavigationAction = 'create' | 'delete' | null;
 
@@ -427,7 +428,28 @@ const useAnimation = (
         animationType: string
     ) => {
         try {
-            if (animationType === 'SWITCH_TO_PARENT') {
+            if (animationType === 'DELETE_CARD') {
+                const deletedCard = oldPath[oldPath.length - 1];
+                let currentAnimatingCards = oldPath.map((card, index) => ({
+                    id: card.id, card, status: 'stable-moving' as AnimationStatus,
+                    style: getFullCardStyle(oldPath.length - 1 - index, dimensions),
+                }));
+                setAnimatingCards(currentAnimatingCards);
+                await animationSleep(20);
+
+                setAnimatingCards(current => current.map(ac => {
+                    if (ac.id === deletedCard.id) {
+                        return { ...ac, status: 'exiting-up-and-grow' as AnimationStatus };
+                    }
+                    const newIdx = newPath.findIndex(c => c.id === ac.id);
+                    if (newIdx !== -1) {
+                        const newDepth = newPath.length - 1 - newIdx;
+                        return { ...ac, style: getFullCardStyle(newDepth, dimensions) };
+                    }
+                    return ac;
+                }));
+                await animationSleep(ANIMATION_DURATION);
+            } else if (animationType === 'SWITCH_TO_PARENT') {
                 const cardsToRemoveInOrder = oldPath.slice(newPath.length).reverse();
                 let currentAnimatingCards = oldPath.map((card, index) => ({
                     id: card.id, card, status: 'stable-moving' as AnimationStatus,
@@ -679,31 +701,20 @@ const useAnimation = (
             return;
         }
 
-        // MODIFICATION: This helper function is now type-safe.
-        const getPathFromCardList = (id: string, cardList: CardData[]): CardData[] => {
+
+        const getPathFromCardList = (id: string, allCards: CardData[] | undefined): CardData[] => {
             const path: CardData[] = [];
-            if (!cardList) return path;
+            if (!allCards) return path;
 
-            // Start with the initial card, which might not be found.
-            let currentCard: CardData | undefined = cardList.find(c => c.id === id);
+            let currentCard: CardData | undefined = allCards.find(c => c.id === id);
 
-            // Loop as long as we have a valid card.
             while (currentCard) {
-                // Add the valid card to the path.
                 path.unshift(currentCard);
-                
-                // Get its parent's ID.
                 const parentId = currentCard.parentId;
-                
-                // If there's no parent, we've reached the root, so we stop.
                 if (!parentId) {
                     break;
                 }
-                
-                // Find the parent card in the list for the next iteration.
-                // This will be `undefined` if the parent isn't in the list,
-                // which will correctly terminate the loop.
-                currentCard = cardList.find(c => c.id === parentId);
+                currentCard = allCards.find(c => c.id === parentId);
             }
             
             return path;
@@ -715,7 +726,9 @@ const useAnimation = (
         const isPrefix = (shortPath: CardData[], longPath: CardData[]) => shortPath.length < longPath.length && shortPath.every((card, index) => card.id === longPath[index]?.id);
 
         let animationType: string;
-        if (navigationAction.current === 'create') animationType = 'CREATE_CHILD';
+        // 关键修改：优先判断删除动作
+        if (navigationAction.current === 'delete') animationType = 'DELETE_CARD';
+        else if (navigationAction.current === 'create') animationType = 'CREATE_CHILD';
         else if (isPrefix(oldPath, newPath)) animationType = 'SWITCH_TO_CHILD';
         else if (isPrefix(newPath, oldPath)) animationType = 'SWITCH_TO_PARENT';
         else if (oldPath.length > 0 && newPath.length > 0 && oldPath[oldPath.length - 1].parentId === newPath[newPath.length - 1].parentId) animationType = 'SWITCH_SIBLING';
@@ -797,6 +810,8 @@ export const CardStack: React.FC<{
   const currentCardId = activeProject?.currentCardId || null;
   const currentCard = cards.find(c => c.id === currentCardId);
 
+  const prevCards = usePrevious(cards);
+
   const lastMessageContent = currentCard?.messages?.[currentCard.messages.length - 1]?.content;
   const prevCardId = usePrevious(currentCardId);
 
@@ -809,6 +824,23 @@ export const CardStack: React.FC<{
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
   const streamAbortControllerRef = useRef<AbortController | null>(null);
 
+  const getPathFromCardList = (id: string, allCards: CardData[] | undefined): CardData[] => {
+      const path: CardData[] = [];
+      if (!allCards) return path;
+
+      let currentCard: CardData | undefined = allCards.find(c => c.id === id);
+
+      while (currentCard) {
+          path.unshift(currentCard);
+          const parentId = currentCard.parentId;
+          if (!parentId) {
+              break;
+          }
+          currentCard = allCards.find(c => c.id === parentId);
+      }
+      
+      return path;
+  };
 
   const dimensions = useMemo<Dimensions>(() => {
     const scaleFactor = isMobile ? 0.90 : 0.75;
@@ -1153,15 +1185,29 @@ export const CardStack: React.FC<{
     deleteCardAndDescendants(id);
   };
 
+
   const cardsToRender = useMemo(() => {
       if (animatedCards && animatedCards.length > 0) {
           return animatedCards;
       }
       
-      const idToRender = (currentCardId !== prevCardId && prevCardId) ? prevCardId : currentCardId;
-      if (!idToRender) return [];
-      const stablePath = getCardPath(idToRender);
+      // 判断是否处于过渡状态
+      const isTransitioning = (currentCardId !== prevCardId) && prevCardId;
+      const idToRender = isTransitioning ? prevCardId : currentCardId;
       
+      if (!idToRender) return [];
+
+      // 【核心修改】
+      // 如果是过渡状态，就在旧的卡片列表(prevCards)中查找旧的ID。
+      // 否则，就在当前的卡片列表(cards)中查找当前的ID。
+      const listToSearch = isTransitioning ? prevCards : cards;
+      const stablePath = getPathFromCardList(idToRender, listToSearch);
+
+      // 如果在过渡期间查找失败（例如，prevCards还没准备好），返回空数组避免崩溃
+      if (isTransitioning && stablePath.length === 0) {
+          return [];
+      }
+
       return stablePath.map((card, index) => {
           const depth = stablePath.length - 1 - index;
           return {
@@ -1171,7 +1217,7 @@ export const CardStack: React.FC<{
               style: getFullCardStyle(depth, dimensions),
           };
       });
-  }, [animatedCards, currentCardId, prevCardId, getCardPath, dimensions, cards]);
+  }, [animatedCards, currentCardId, prevCardId, cards, prevCards, getCardPath, dimensions]); // 确保把 prevCards 和 cards 都加入依赖数组
 
   // MODIFICATION: Updated useEffect to handle stream lifecycle correctly.
   useEffect(() => {
@@ -1219,6 +1265,15 @@ export const CardStack: React.FC<{
         
         .card-container.exiting-shrink-out { animation: card-shrink-out ${ANIMATION_DURATION}ms forwards ease-in-out; }
         @keyframes card-shrink-out { from { opacity: 0.8; } to { opacity: 0; transform: translate(-50%, -50%) scale(0.5); } }
+
+        /* 新增的删除动画 */
+        .card-container.exiting-up-and-grow { animation: card-exit-up-and-grow ${ANIMATION_DURATION}ms forwards ease-in-out; }
+        @keyframes card-exit-up-and-grow {
+          to {
+            opacity: 0;
+            transform: translate(-50%, -150%) scale(1.2);
+          }
+        }
       `}</style>
       
       {!currentCardId && cardsToRender.length === 0 ? (
