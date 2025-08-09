@@ -874,7 +874,15 @@ export const CardStack: React.FC<{
       setPreviewState((prev) => ({ ...prev, content: "API settings are missing.", isLoading: false }));
       return;
     }
-    const userPrompt = `Please provide a concise explanation for the term: "${term}".`;
+    
+    const currentCard = cards.find(c => c.id === currentCardId);
+    const backgroundTopic = currentCard?.title;
+
+    let userPrompt = `Please provide a concise explanation for the term: "${term}".`;
+    if (backgroundTopic && backgroundTopic !== '新卡片') {
+        userPrompt = `Background Topic: "${backgroundTopic}"\n\nPlease provide a concise explanation for the term: "${term}".`;
+    }
+
     const systemPromptContent = [globalSystemPrompt, dialogueSystemPrompt].filter(Boolean).join('\n\n');
     const messages: { role: 'system' | 'user'; content: string }[] = [];
     if (systemPromptContent) {
@@ -975,7 +983,8 @@ export const CardStack: React.FC<{
   const fetchLLMStreamForNewCard = useCallback(async (
     cardId: string, 
     history: CardMessage[], 
-    targetMessageInfo?: { aiMessageIdToContinue: string } | { userMessageId: string }
+    targetMessageInfo?: { aiMessageIdToContinue: string } | { userMessageId: string },
+    backgroundTopic?: string
   ) => {
     // Abort any previously running stream before starting a new one.
     if (streamAbortControllerRef.current) {
@@ -1011,6 +1020,13 @@ export const CardStack: React.FC<{
             role: msg.role === 'ai' ? 'assistant' : 'user',
             content: msg.content
         }));
+
+        if (backgroundTopic && backgroundTopic !== '新卡片') {
+            const userMessage = apiMessages.find(m => m.role === 'user');
+            if (userMessage) {
+                userMessage.content = `Background Topic: "${backgroundTopic}"\n\nQuestion:\n${userMessage.content}`;
+            }
+        }
         
         const systemPromptContent = [globalSystemPrompt, dialogueSystemPrompt].filter(Boolean).join('\n\n');
         const messagesForApi: any[] = [...apiMessages];
@@ -1156,6 +1172,9 @@ export const CardStack: React.FC<{
       content: selectedContent, 
       timestamp: Date.now() 
     };
+
+    const originalCard = cards.find(c => c.id === currentCardId);
+    const backgroundTopic = originalCard?.title;
     
     addCard([userMsg], currentCardId || undefined);
     setSelectedContent(null);
@@ -1166,7 +1185,7 @@ export const CardStack: React.FC<{
     const newCard = activeProject?.cards.find(c => c.id === newCardId);
 
     if (newCardId && newCard) {
-      fetchLLMStreamForNewCard(newCardId, newCard.messages, { userMessageId: userMsg.id });
+      fetchLLMStreamForNewCard(newCardId, newCard.messages, { userMessageId: userMsg.id }, backgroundTopic);
     }
   };
   

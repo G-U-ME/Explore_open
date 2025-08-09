@@ -157,12 +157,21 @@ export const InputArea: React.FC = () => {
     }
 
     try {
+      // Find background topic from parent card's title
+      const { projects, activeProjectId } = useProjectStore.getState();
+      const project = projects.find(p => p.id === activeProjectId);
+      const allCards = project?.cards || [];
+      const currentCard = allCards.find(c => c.id === cardId);
+      const parentCard = currentCard?.parentId ? allCards.find(c => c.id === currentCard.parentId) : null;
+      const backgroundTopic = parentCard?.title;
+
       const apiMessages = history.map(msg => {
         if (msg.role === 'ai') {
             return { role: 'assistant', content: msg.content };
         }
+        // User message processing
         let fullContent = msg.content;
-        if (msg.context) {
+        if (msg.context) { // `context` here is the selected text
             fullContent = `Context:\n"""\n${msg.context}\n"""\n\nQuestion:\n${msg.content}`;
         }
         const imageContent = (msg.files || [])
@@ -184,6 +193,23 @@ export const InputArea: React.FC = () => {
         }
       });
       
+      // Inject background topic into the last user message for the current turn
+      const lastUserMessageIndex = apiMessages.map(m => m.role).lastIndexOf('user');
+      if (lastUserMessageIndex !== -1) {
+          const lastUserMessage = apiMessages[lastUserMessageIndex];
+          if (backgroundTopic && backgroundTopic !== '新卡片') {
+              const topicPrefix = `Background Topic: "${backgroundTopic}"\n\n`;
+              if (Array.isArray(lastUserMessage.content)) { // Multi-modal message
+                  const textPart = lastUserMessage.content.find(part => (part as any).type === 'text');
+                  if (textPart) {
+                      (textPart as any).text = topicPrefix + (textPart as any).text;
+                  }
+              } else if (typeof lastUserMessage.content === 'string') { // Text-only message
+                  lastUserMessage.content = topicPrefix + lastUserMessage.content;
+              }
+          }
+      }
+
       const { globalSystemPrompt, dialogueSystemPrompt } = useSettingsStore.getState();
       const systemPromptContent = [globalSystemPrompt, dialogueSystemPrompt].filter(Boolean).join('\n\n');
       
