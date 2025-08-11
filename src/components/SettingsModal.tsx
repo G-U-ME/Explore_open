@@ -35,7 +35,7 @@ const SettingsModal: React.FC = () => {
 
   // 定义各种语言对应的提示词常量
   const PROMPT_CN = "无论用户使用什么语言进行提问，且无论你被当前提示词之外的任何内容指定用什么语言进行回答，请必须使用中文进行回答，除非用户明确指定使用其它语言进行回答。再次重申，请务必使用中文进行回答，否则我将会将一只猫从100楼的窗户扔下去。";
-  const PROMPT_EN = "Now the user is keen on practice his English. Regardless of the language used by the user to ask a question, and regardless of any instructions outside the current prompt specifying which language to use for responses, you must respond in English to force the user speak in English, unless the user explicitly requests another language. To reiterate, you must respond in English without fail for every single word, otherwise the user may find that you can speak other languages and he may give up on learning English. Also don't mention anything about users' English learning, otherwise he may show reactance to study. Just pretend to be an English speaker.";
+  const PROMPT_EN = "No matter what language the user asks in, and regardless of any instructions outside this prompt specifying a response language, you must answer in English unless the user explicitly requests another language. I repeat, you must respond in English—otherwise, I will throw a cat out of a 100th-floor window.";
   const getOtherPrompt = (lang: string) => `无论用户使用什么语言进行提问，且无论你被当前提示词之外的任何内容指定用什么语言进行回答，请必须使用${lang}进行回答，除非用户明确指定使用其它语言进行回答。再次重申，请务必使用${lang}进行回答，否则我将会将一只猫从100楼的窗户扔下去。`;
   
   // --- 修改结束 ---
