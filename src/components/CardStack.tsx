@@ -259,14 +259,17 @@ const PreviewCard: React.FC<{
   );
 };
 
-const ToolCallDisplay: React.FC<{ toolCalls: any[]; isStreaming: boolean }> = ({ toolCalls, isStreaming }) => {
+const ToolCallDisplay: React.FC<{ toolCalls: any[]; isStreaming: boolean; initialElapsedTime?: number; }> = ({ toolCalls, isStreaming, initialElapsedTime = 0 }) => {
   const [isExpanded, setIsExpanded] = useState(true);
-  const [elapsedTime, setElapsedTime] = useState(0);
+  // MODIFICATION START: Initialize state with the passed-in initial time.
+  const [elapsedTime, setElapsedTime] = useState(initialElapsedTime);
+  // MODIFICATION END
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
     // Start a new timer if streaming starts
     if (isStreaming) {
+      // This logic correctly resumes the timer from the current `elapsedTime` value
       const startTime = Date.now() - elapsedTime * 1000;
       timerRef.current = setInterval(() => {
         setElapsedTime(Math.round((Date.now() - startTime) / 1000));
@@ -424,11 +427,17 @@ const CurrentCardDialog: React.FC<{
                 const isLastMessage = idx === card.messages.length - 1;
                 const isStreaming = isGlobalTyping && isLastMessage;
                 const toolCalls = (msg.tool_calls && Array.isArray(msg.tool_calls)) ? msg.tool_calls : [];
+                // MODIFICATION START: Look for the transient property `_initialElapsedTime` on the message object.
+                // Using `as any` is a pragmatic way to access this property without modifying the store's type definition file.
+                const initialTime = (msg as any)._initialElapsedTime;
+                // MODIFICATION END
 
                 return (
                   <div key={msg.id || idx} className={`${isMobile ? 'text-base' : 'text-content'} max-w-full`}>
                     {toolCalls.length > 0 && (
-                      <ToolCallDisplay toolCalls={toolCalls} isStreaming={isStreaming} />
+                      // MODIFICATION START: Pass the initial time to the ToolCallDisplay component.
+                      <ToolCallDisplay toolCalls={toolCalls} isStreaming={isStreaming} initialElapsedTime={initialTime} />
+                      // MODIFICATION END
                     )}
                     <MarkdownRenderer content={msg.content} onTermClick={onTermClick} />
                   </div>
@@ -891,7 +900,9 @@ export const CardStack: React.FC<{
   centerAreaWidth: number;
   isMobile?: boolean;
 }> = ({ centerY, availableHeight, centerAreaWidth, isMobile = false }) => {
-  const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle, appendMessage, updateMessage } = useCardStore();
+  // MODIFICATION START: Add `setIsTyping` to the destructured props from the store.
+  const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle, appendMessage, updateMessage, setIsTyping } = useCardStore();
+  // MODIFICATION END
   const { projects, activeProjectId } = useProjectStore();
   const { apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, isWebSearchEnabled } = useSettingsStore();
 
@@ -912,16 +923,15 @@ export const CardStack: React.FC<{
   const lettingStreamContinueRef = useRef(false);
 
   const navigationAction = useRef<NavigationAction>(null);
-  const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: '', toolCalls: [] as any[] });
+  const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: '', toolCalls: [] as any[], elapsedTime: 0 });
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
   const streamAbortControllerRef = useRef<AbortController | null>(null);
+  const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const getPathFromCardList = (id: string, allCards: CardData[] | undefined): CardData[] => {
       const path: CardData[] = [];
       if (!allCards) return path;
-
       let currentCard: CardData | undefined = allCards.find(c => c.id === id);
-
       while (currentCard) {
           path.unshift(currentCard);
           const parentId = currentCard.parentId;
@@ -930,7 +940,6 @@ export const CardStack: React.FC<{
           }
           currentCard = allCards.find(c => c.id === parentId);
       }
-      
       return path;
   };
 
@@ -960,6 +969,16 @@ export const CardStack: React.FC<{
   const fetchAIForPreview = async (term: string) => {
     const controller = new AbortController();
     streamAbortControllerRef.current = controller;
+
+    // MODIFICATION START: Set the global typing indicator to true.
+    setIsTyping(true);
+    // MODIFICATION END
+
+    if (previewTimerRef.current) clearInterval(previewTimerRef.current);
+    const startTime = Date.now();
+    previewTimerRef.current = setInterval(() => {
+        setPreviewState(prev => ({...prev, elapsedTime: Math.round((Date.now() - startTime) / 1000) }));
+    }, 1000);
 
     if (!apiUrl || !apiKey || !activeModel) {
       setPreviewState((prev) => ({ ...prev, content: "API settings are missing.", isLoading: false }));
@@ -1109,8 +1128,18 @@ export const CardStack: React.FC<{
             }
         }
     } finally {
+        // MODIFICATION START: The `finally` block now ensures the global typing state is turned off
+        // when this specific stream operation concludes, regardless of whether it was handed off or not.
+        setIsTyping(false);
+        // MODIFICATION END
+
         if (!isHandedOff) {
             setPreviewState(prev => ({ ...prev, isLoading: false }));
+        }
+        
+        if (previewTimerRef.current) {
+            clearInterval(previewTimerRef.current);
+            previewTimerRef.current = null;
         }
     }
   };
@@ -1243,7 +1272,7 @@ export const CardStack: React.FC<{
     
     setPreviewState(prevState => {
       if (prevState.sourceTerm === term && prevState.visible) {
-        return { ...prevState, visible: false, sourceTerm: '' };
+        return { ...prevState, visible: false, sourceTerm: '', elapsedTime: 0 };
       }
       return { 
         visible: true, 
@@ -1252,13 +1281,14 @@ export const CardStack: React.FC<{
         content: '', 
         toolCalls: [],
         top: finalTop, 
-        left: finalLeft 
+        left: finalLeft,
+        elapsedTime: 0, 
       };
     });
   }, [currentCardRef]);
   
   const handleClosePreview = () => {
-    setPreviewState(p => ({...p, visible: false, sourceTerm: ''}));
+    setPreviewState(p => ({...p, visible: false, sourceTerm: '', elapsedTime: 0}));
   };
   
   const handleCreateCard = (messages: CardMessage[], parentId?: string) => {
@@ -1273,17 +1303,19 @@ export const CardStack: React.FC<{
     
     navigationAction.current = 'create';
     const userMsg: CardMessage = { id: `msg_${Date.now()}_user`, role: 'user', content: previewState.sourceTerm, timestamp: Date.now() };
-    const aiMsg: CardMessage = { 
+    
+    const aiMsg: CardMessage & { _initialElapsedTime?: number } = { 
         id: `msg_${Date.now()}_ai`, 
         role: 'ai', 
         content: previewState.content, 
         tool_calls: previewState.toolCalls,
-        timestamp: Date.now() 
+        timestamp: Date.now(),
+        _initialElapsedTime: previewState.elapsedTime,
     };
     
     addCard([userMsg, aiMsg], currentCardId || undefined);
     
-    setPreviewState(p => ({...p, visible: false}));
+    setPreviewState(p => ({...p, visible: false, elapsedTime: 0}));
 
     const { projects, activeProjectId } = useProjectStore.getState();
     const activeProject = projects.find(p => p.id === activeProjectId);
@@ -1298,7 +1330,7 @@ export const CardStack: React.FC<{
       }
     }
   };
-
+  
   const handleCreateFromSelection = () => {
     if (!selectedContent) return;
     navigationAction.current = 'create';
@@ -1371,6 +1403,10 @@ export const CardStack: React.FC<{
 
   useEffect(() => {
     if (!previewState.visible || !previewState.sourceTerm) {
+      if (previewTimerRef.current) {
+          clearInterval(previewTimerRef.current);
+          previewTimerRef.current = null;
+      }
       return;
     }
 
