@@ -193,18 +193,17 @@ export const InputArea: React.FC = () => {
         }
       });
       
-      // Inject background topic into the last user message for the current turn
       const lastUserMessageIndex = apiMessages.map(m => m.role).lastIndexOf('user');
       if (lastUserMessageIndex !== -1) {
           const lastUserMessage = apiMessages[lastUserMessageIndex];
           if (backgroundTopic && backgroundTopic !== '新卡片') {
               const topicPrefix = `Background Topic: "${backgroundTopic}"\n\n`;
-              if (Array.isArray(lastUserMessage.content)) { // Multi-modal message
+              if (Array.isArray(lastUserMessage.content)) { 
                   const textPart = lastUserMessage.content.find(part => (part as any).type === 'text');
                   if (textPart) {
                       (textPart as any).text = topicPrefix + (textPart as any).text;
                   }
-              } else if (typeof lastUserMessage.content === 'string') { // Text-only message
+              } else if (typeof lastUserMessage.content === 'string') {
                   lastUserMessage.content = topicPrefix + lastUserMessage.content;
               }
           }
@@ -249,6 +248,8 @@ export const InputArea: React.FC = () => {
       const decoder = new TextDecoder();
       let buffer = '';
       let aiContent = '';
+      const toolCalls: any[] = []; // This will now hold both tool_calls and reasoning_content
+
       mainReadLoop: while (true) {
         const { value, done } = await reader.read();
         if (done) break;
@@ -262,11 +263,70 @@ export const InputArea: React.FC = () => {
             if (data === '[DONE]') break mainReadLoop;
             try {
                 const json = JSON.parse(data);
-                const delta = json.choices?.[0]?.delta?.content;
-                if (delta) {
-                    aiContent += delta;
-                    const normalizedContent = normalizeMathDelimiters(aiContent);
-                    updateMessage(cardId, aiMsgId, { content: normalizedContent });
+                const delta = json.choices?.[0]?.delta;
+
+                if (!delta) continue;
+
+                let messageNeedsUpdate = false;
+                const updatePayload: Partial<CardMessage> & { tool_calls?: any[] } = {};
+
+                if (delta.content) {
+                    aiContent += delta.content;
+                    updatePayload.content = normalizeMathDelimiters(aiContent);
+                    messageNeedsUpdate = true;
+                }
+                
+                // --- START OF MODIFICATION ---
+                // Handle DeepSeek's proprietary `reasoning_content` field
+                if (json.choices?.[0]?.delta?.reasoning_content) {
+                    const reasoningChunk = json.choices[0].delta.reasoning_content;
+
+                    // Find or create a dedicated "Reasoning" tool call object in our array
+                    let reasoningCall = toolCalls.find(call => call.id === 'deepseek_reasoning');
+                    if (!reasoningCall) {
+                        reasoningCall = {
+                            id: 'deepseek_reasoning',
+                            type: 'function',
+                            function: {
+                                name: 'Reasoning',
+                                arguments: '',
+                            }
+                        };
+                        toolCalls.push(reasoningCall);
+                    }
+                    
+                    // Append the new reasoning text
+                    reasoningCall.function.arguments += reasoningChunk;
+                    
+                    updatePayload.tool_calls = JSON.parse(JSON.stringify(toolCalls));
+                    messageNeedsUpdate = true;
+                }
+                // --- END OF MODIFICATION ---
+
+                // Keep the original tool_calls logic for compatibility with other APIs
+                if (delta.tool_calls) {
+                    for (const chunk of delta.tool_calls) {
+                        while (toolCalls.length <= chunk.index) {
+                            toolCalls.push({});
+                        }
+                        const current = toolCalls[chunk.index];
+                        if (chunk.id) current.id = chunk.id;
+                        if (chunk.type) current.type = chunk.type;
+                        if (chunk.function) {
+                            if (!current.function) current.function = {};
+                            if (chunk.function.name) current.function.name = chunk.function.name;
+                            if (chunk.function.arguments) {
+                                if (!current.function.arguments) current.function.arguments = "";
+                                current.function.arguments += chunk.function.arguments;
+                            }
+                        }
+                    }
+                    updatePayload.tool_calls = JSON.parse(JSON.stringify(toolCalls));
+                    messageNeedsUpdate = true;
+                }
+
+                if (messageNeedsUpdate) {
+                    updateMessage(cardId, aiMsgId, updatePayload);
                 }
             } catch (parseError) {
                 console.warn('解析流式数据时出错 (已跳过):', parseError, 'in line:', line);

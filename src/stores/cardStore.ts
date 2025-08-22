@@ -12,6 +12,7 @@ export interface CardMessage {
   files?: string[]
   context?: string
   timestamp?: number
+  tool_calls?: any[];
 }
 
 export interface CardData {
@@ -231,14 +232,31 @@ const useCardStore = create<CardState>()(
       updateMessage: (cardId, messageId, updates) => {
         const { cards } = getActiveProjectData();
         const newCards = cards.map((card) => {
+          // If it's not the card we're looking for, return it as is.
           if (card.id !== cardId) {
             return card;
           }
-          const updatedMessages = card.messages.map((msg) =>
-            msg.id === messageId ? { ...msg, ...updates } : msg
-          );
+      
+          // For the correct card, map over its messages to find the one to update.
+          const updatedMessages = card.messages.map((msg) => {
+            // If it's not the message we're looking for, return it as is.
+            if (msg.id !== messageId) {
+              return msg;
+            }
+      
+            // This is the message to update.
+            // Create a new message object by spreading the existing message `msg` 
+            // and then spreading the `updates` over it. This merges the properties.
+            // If `updates` only contains `content`, the existing `tool_calls` from `msg` will be preserved.
+            // If `updates` only contains `tool_calls`, the existing `content` from `msg` will be preserved.
+            return { ...msg, ...updates };
+          });
+      
+          // Return the card with the newly updated messages array.
           return { ...card, messages: updatedMessages };
         });
+      
+        // Update the project state with the new array of cards.
         updateActiveProject({ cards: newCards });
       },
 

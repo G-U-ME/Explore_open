@@ -1,7 +1,7 @@
 import React, { useEffect, useState, useRef, useCallback, useMemo } from 'react';
 import ReactDOM from 'react-dom';
 import useCardStore, { CardData, CardMessage } from '../stores/cardStore';
-import { X, ZoomIn, Loader } from 'lucide-react';
+import { X, ZoomIn, Loader, ChevronUp, ChevronDown } from 'lucide-react';
 import { useProjectStore } from '../stores/projectStore';
 import ReactMarkdown, { Components, ExtraProps } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -255,6 +255,78 @@ const PreviewCard: React.FC<{
   );
 };
 
+const ToolCallDisplay: React.FC<{ toolCalls: any[]; isStreaming: boolean }> = ({ toolCalls, isStreaming }) => {
+  const [isExpanded, setIsExpanded] = useState(true);
+  const [elapsedTime, setElapsedTime] = useState(0);
+  const timerRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    // Start a new timer if streaming starts
+    if (isStreaming) {
+      const startTime = Date.now() - elapsedTime * 1000;
+      timerRef.current = setInterval(() => {
+        setElapsedTime(Math.round((Date.now() - startTime) / 1000));
+      }, 1000);
+    } else {
+      // Clear interval if it exists and streaming stops
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    }
+
+    // Cleanup on unmount or if isStreaming changes
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+      }
+    };
+  }, [isStreaming]);
+
+  if (!toolCalls || toolCalls.length === 0) {
+    return null;
+  }
+
+  // Process all tool call arguments to be rendered as Markdown.
+  // This handles the reasoning/thinking text specifically.
+  const allArguments = toolCalls
+    .map(call => call.function?.arguments || '')
+    .join('\n\n');
+
+  const cleanContent = allArguments.replace(/@@(.*?)@@/g, '$1');
+  const normalizedContent = useMemo(() => normalizeMathDelimiters(cleanContent), [cleanContent]);
+
+  return (
+    <div className="bg-[#2C2C2C] rounded-lg p-2.5 my-2">
+      <div className="flex justify-between items-center text-sm mb-2">
+        <div className="flex items-center gap-2">
+          <span className="font-semibold text-white">{isStreaming ? 'Thinking' : 'Thinking Completed'}</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-gray-400">{elapsedTime}s</span>
+          <button
+            onClick={() => setIsExpanded(!isExpanded)}
+            className="w-6 h-6 bg-[#4C4C4C] rounded-full flex items-center justify-center hover:bg-[#5C5C5C]"
+            title={isExpanded ? "Collapse" : "Expand"}
+          >
+            {isExpanded ? <ChevronUp size={16} className="text-white" /> : <ChevronDown size={16} className="text-white" />}
+          </button>
+        </div>
+      </div>
+      {isExpanded && (
+        <div className="text-[#B4B4B4] text-xs bg-[#222222] p-2 rounded-md overflow-x-auto scrollbar-thin scrollbar-thumb-gray-500 scrollbar-track-transparent">
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkMath]}
+            rehypePlugins={[rehypeKatex, [rehypeSanitize, customSanitizeSchema]]}
+          >
+            {normalizedContent}
+          </ReactMarkdown>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const CurrentCardDialog: React.FC<{ 
   card: CardData; 
   cardRef?: React.RefObject<HTMLDivElement>; 
@@ -266,6 +338,8 @@ const CurrentCardDialog: React.FC<{
   isMobile?: boolean;
 }> = ({ card, cardRef, onDelete, onCreateNew, onTextSelection, onCreateFromSelection, onTermClick, isMobile = false }) => {
   const [selectionButton, setSelectionButton] = useState({ visible: false, top: 0, left: 0 });
+  const { isTyping: isGlobalTyping } = useCardStore();
+
   const handleTextSelection = useCallback(() => {
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0 && selection.toString().trim()) {
@@ -280,16 +354,19 @@ const CurrentCardDialog: React.FC<{
       setSelectionButton({ visible: false, top: 0, left: 0 });
     }
   }, [onTextSelection, cardRef]);
+
   useEffect(() => {
     const handleMouseUp = () => setTimeout(handleTextSelection, 0);
     const container = cardRef?.current;
     if (container) { container.addEventListener('mouseup', handleMouseUp); }
     return () => { if (container) { container.removeEventListener('mouseup', handleMouseUp); } };
   }, [cardRef, handleTextSelection]);
+
   const handleCreateFromSelectionClick = () => {
     onCreateFromSelection();
     setSelectionButton({ visible: false, top: 0, left: 0 });
   };
+
   return (
     <div
       ref={cardRef}
@@ -330,19 +407,30 @@ const CurrentCardDialog: React.FC<{
       <div className="w-full flex-1 overflow-y-auto min-h-0 [&::-webkit-scrollbar]:w-[6px] [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#D9D9D9] [&::-webkit-scrollbar-thumb]:rounded-full pr-2">
         {card.messages && card.messages.length > 0 ? (
           <div className="flex flex-col gap-4"> 
-            {card.messages.map((msg, idx) => (
-              msg.role === 'user' ? (
-                <div key={msg.id || idx} className="flex justify-end">
-                  <div className="bg-[#4C4C4C] rounded-[16px_4px_16px_16px] px-3 py-2 max-w-[90%]">
-                    <span className={`${isMobile ? 'text-base' : 'text-content'} whitespace-pre-wrap`}>{msg.content}</span>
+            {card.messages.map((msg, idx) => {
+              if (msg.role === 'user') {
+                return (
+                  <div key={msg.id || idx} className="flex justify-end">
+                    <div className="bg-[#4C4C4C] rounded-[16px_4px_16px_16px] px-3 py-2 max-w-[90%]">
+                      <span className={`${isMobile ? 'text-base' : 'text-content'} whitespace-pre-wrap`}>{msg.content}</span>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <div key={msg.id || idx} className={`${isMobile ? 'text-base' : 'text-content'} max-w-full`}>
-                  <MarkdownRenderer content={msg.content} onTermClick={onTermClick} />
-                </div>
-              )
-            ))}
+                );
+              } else { // AI Message
+                const isLastMessage = idx === card.messages.length - 1;
+                const isStreaming = isGlobalTyping && isLastMessage;
+                const toolCalls = (msg.tool_calls && Array.isArray(msg.tool_calls)) ? msg.tool_calls : [];
+
+                return (
+                  <div key={msg.id || idx} className={`${isMobile ? 'text-base' : 'text-content'} max-w-full`}>
+                    {toolCalls.length > 0 && (
+                      <ToolCallDisplay toolCalls={toolCalls} isStreaming={isStreaming} />
+                    )}
+                    <MarkdownRenderer content={msg.content} onTermClick={onTermClick} />
+                  </div>
+                );
+              }
+            })}
           </div>
         ) : (
           <div className={`text-center text-[#888] py-4 ${isMobile ? 'text-base' : 'text-lg'}`}>Start Exploring</div>
