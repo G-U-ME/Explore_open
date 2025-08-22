@@ -223,10 +223,11 @@ const PreviewCard: React.FC<{
   content: string;
   toolCalls: any[];
   isLoading: boolean;
+  thinkingCompleted: boolean; // --- MODIFICATION: Added prop
   onClose: () => void;
   onCreate: () => void;
   parentRef: React.RefObject<HTMLDivElement>;
-}> = ({ position, content, toolCalls, isLoading, onClose, onCreate, parentRef }) => {
+}> = ({ position, content, toolCalls, isLoading, thinkingCompleted, onClose, onCreate, parentRef }) => {
   const cardWidth = parentRef.current ? parentRef.current.offsetWidth / 2 : 300;
   const cardHeight = parentRef.current ? parentRef.current.offsetHeight / 2 : 200;
   const cleanContent = content.replace(/@@(.*?)@@/g, '$1');
@@ -249,7 +250,8 @@ const PreviewCard: React.FC<{
       <div className="markdown-content w-full flex-1 overflow-y-auto min-h-0 text-sm [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#888] [&::-webkit-scrollbar-thumb]:rounded-full">
         {isLoading && toolCalls.length === 0 && !content && <Loader className="animate-spin text-gray-400 mx-auto mt-4" />}
         {toolCalls.length > 0 && (
-          <ToolCallDisplay toolCalls={toolCalls} isStreaming={isLoading} />
+           // --- MODIFICATION: Calculate isStreaming based on thinkingCompleted ---
+          <ToolCallDisplay toolCalls={toolCalls} isStreaming={isLoading && !thinkingCompleted} />
         )}
         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex, [rehypeSanitize, customSanitizeSchema]]}>
             {normalizedContent}
@@ -425,19 +427,17 @@ const CurrentCardDialog: React.FC<{
                 );
               } else { // AI Message
                 const isLastMessage = idx === card.messages.length - 1;
-                const isStreaming = isGlobalTyping && isLastMessage;
+                // --- MODIFICATION: Check transient property to determine if thinking is complete ---
+                const thinkingCompleted = (msg as any)._thinkingCompleted === true;
+                const isStreaming = isGlobalTyping && isLastMessage && !thinkingCompleted;
+
                 const toolCalls = (msg.tool_calls && Array.isArray(msg.tool_calls)) ? msg.tool_calls : [];
-                // MODIFICATION START: Look for the transient property `_initialElapsedTime` on the message object.
-                // Using `as any` is a pragmatic way to access this property without modifying the store's type definition file.
                 const initialTime = (msg as any)._initialElapsedTime;
-                // MODIFICATION END
 
                 return (
                   <div key={msg.id || idx} className={`${isMobile ? 'text-base' : 'text-content'} max-w-full`}>
                     {toolCalls.length > 0 && (
-                      // MODIFICATION START: Pass the initial time to the ToolCallDisplay component.
                       <ToolCallDisplay toolCalls={toolCalls} isStreaming={isStreaming} initialElapsedTime={initialTime} />
-                      // MODIFICATION END
                     )}
                     <MarkdownRenderer content={msg.content} onTermClick={onTermClick} />
                   </div>
@@ -900,9 +900,7 @@ export const CardStack: React.FC<{
   centerAreaWidth: number;
   isMobile?: boolean;
 }> = ({ centerY, availableHeight, centerAreaWidth, isMobile = false }) => {
-  // MODIFICATION START: Add `setIsTyping` to the destructured props from the store.
   const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle, appendMessage, updateMessage, setIsTyping } = useCardStore();
-  // MODIFICATION END
   const { projects, activeProjectId } = useProjectStore();
   const { apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, isWebSearchEnabled } = useSettingsStore();
 
@@ -923,7 +921,8 @@ export const CardStack: React.FC<{
   const lettingStreamContinueRef = useRef(false);
 
   const navigationAction = useRef<NavigationAction>(null);
-  const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: '', toolCalls: [] as any[], elapsedTime: 0 });
+  // --- MODIFICATION: Added `thinkingCompleted` to preview state ---
+  const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, thinkingCompleted: false, sourceTerm: '', toolCalls: [] as any[], elapsedTime: 0 });
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
   const streamAbortControllerRef = useRef<AbortController | null>(null);
   const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
@@ -970,9 +969,8 @@ export const CardStack: React.FC<{
     const controller = new AbortController();
     streamAbortControllerRef.current = controller;
 
-    // MODIFICATION START: Set the global typing indicator to true.
+    // --- MODIFICATION: Set global typing indicator for preview streams ---
     setIsTyping(true);
-    // MODIFICATION END
 
     if (previewTimerRef.current) clearInterval(previewTimerRef.current);
     const startTime = Date.now();
@@ -988,9 +986,9 @@ export const CardStack: React.FC<{
     const currentCard = cards.find(c => c.id === currentCardId);
     const backgroundTopic = currentCard?.title;
 
-    let userPrompt = `Please provide a concise explanation for the term: "${term}".`;
+    let userPrompt = `Please provide an explanation for the term: "${term}".`;
     if (backgroundTopic && backgroundTopic !== '新卡片') {
-        userPrompt = `Background Topic: "${backgroundTopic}"\n\nPlease provide a concise explanation for the term: "${term}".`;
+        userPrompt = `Background Topic: "${backgroundTopic}"\n\nPlease provide an explanation for the term: "${term}".`;
     }
 
     const systemPromptContent = [globalSystemPrompt, dialogueSystemPrompt].filter(Boolean).join('\n\n');
@@ -1026,6 +1024,7 @@ export const CardStack: React.FC<{
       let buffer = '';
       let aiContent = '';
       const toolCalls: any[] = [];
+      let thinkingCompleted = false; // --- MODIFICATION: Added flag
 
       mainReadLoop: while (true) {
         const { value, done } = await reader.read();
@@ -1057,6 +1056,10 @@ export const CardStack: React.FC<{
               aiContent += delta.content;
               newContentPayload = normalizeMathDelimiters(aiContent);
               updateNeeded = true;
+              // --- MODIFICATION: Flag thinking as complete ---
+              if (!thinkingCompleted) {
+                  thinkingCompleted = true;
+              }
             }
 
             if (json.choices?.[0]?.delta?.reasoning_content) {
@@ -1092,24 +1095,29 @@ export const CardStack: React.FC<{
             
             if (updateNeeded) {
               if (isHandedOff && handedOffTarget) {
-                  const updatePayload: Partial<CardMessage> = {};
+                  // --- MODIFICATION: Add transient property for handoff ---
+                  const updatePayload: Partial<CardMessage> & { _thinkingCompleted?: boolean } = {};
                   if (newContentPayload !== undefined) updatePayload.content = newContentPayload;
                   if (newToolCallsPayload !== undefined) updatePayload.tool_calls = newToolCallsPayload;
+                  if (thinkingCompleted) updatePayload._thinkingCompleted = true;
                   updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, updatePayload);
               }
               else if (streamTargetRef.current?.type === 'preview') {
+                  // --- MODIFICATION: Update thinking state for preview ---
                   setPreviewState(prev => ({
                       ...prev,
                       ...(newContentPayload !== undefined && { content: newContentPayload }),
                       ...(newToolCallsPayload !== undefined && { toolCalls: newToolCallsPayload }),
+                      ...(thinkingCompleted && { thinkingCompleted: true }),
                   }));
               }
               else if (streamTargetRef.current?.type === 'card') {
                   isHandedOff = true;
                   handedOffTarget = { cardId: streamTargetRef.current.cardId!, messageId: streamTargetRef.current.messageId! };
-                  const updatePayload: Partial<CardMessage> = {};
+                  const updatePayload: Partial<CardMessage> & { _thinkingCompleted?: boolean } = {};
                   if (newContentPayload !== undefined) updatePayload.content = newContentPayload;
                   if (newToolCallsPayload !== undefined) updatePayload.tool_calls = newToolCallsPayload;
+                  if (thinkingCompleted) updatePayload._thinkingCompleted = true;
                   updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, updatePayload);
               }
             }
@@ -1128,10 +1136,8 @@ export const CardStack: React.FC<{
             }
         }
     } finally {
-        // MODIFICATION START: The `finally` block now ensures the global typing state is turned off
-        // when this specific stream operation concludes, regardless of whether it was handed off or not.
+        // --- MODIFICATION: Turn off global typing indicator ---
         setIsTyping(false);
-        // MODIFICATION END
 
         if (!isHandedOff) {
             setPreviewState(prev => ({ ...prev, isLoading: false }));
@@ -1274,9 +1280,11 @@ export const CardStack: React.FC<{
       if (prevState.sourceTerm === term && prevState.visible) {
         return { ...prevState, visible: false, sourceTerm: '', elapsedTime: 0 };
       }
+      // --- MODIFICATION: Reset thinkingCompleted on new term click ---
       return { 
         visible: true, 
         isLoading: true, 
+        thinkingCompleted: false,
         sourceTerm: term, 
         content: '', 
         toolCalls: [],
@@ -1304,13 +1312,15 @@ export const CardStack: React.FC<{
     navigationAction.current = 'create';
     const userMsg: CardMessage = { id: `msg_${Date.now()}_user`, role: 'user', content: previewState.sourceTerm, timestamp: Date.now() };
     
-    const aiMsg: CardMessage & { _initialElapsedTime?: number } = { 
+    // --- MODIFICATION: Persist thinking state when creating card ---
+    const aiMsg: CardMessage & { _initialElapsedTime?: number; _thinkingCompleted?: boolean } = { 
         id: `msg_${Date.now()}_ai`, 
         role: 'ai', 
         content: previewState.content, 
         tool_calls: previewState.toolCalls,
         timestamp: Date.now(),
         _initialElapsedTime: previewState.elapsedTime,
+        _thinkingCompleted: previewState.thinkingCompleted,
     };
     
     addCard([userMsg, aiMsg], currentCardId || undefined);
@@ -1523,6 +1533,7 @@ export const CardStack: React.FC<{
           content={previewState.content}
           toolCalls={previewState.toolCalls}
           isLoading={previewState.isLoading}
+          thinkingCompleted={previewState.thinkingCompleted} // --- MODIFICATION: Pass prop
           onClose={handleClosePreview}
           onCreate={handleCreateFromPreview}
           parentRef={currentCardRef}

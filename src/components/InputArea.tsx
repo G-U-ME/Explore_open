@@ -248,7 +248,8 @@ export const InputArea: React.FC = () => {
       const decoder = new TextDecoder();
       let buffer = '';
       let aiContent = '';
-      const toolCalls: any[] = []; // This will now hold both tool_calls and reasoning_content
+      const toolCalls: any[] = [];
+      let thinkingCompleted = false; // --- MODIFICATION: Flag to track thinking phase
 
       mainReadLoop: while (true) {
         const { value, done } = await reader.read();
@@ -268,47 +269,34 @@ export const InputArea: React.FC = () => {
                 if (!delta) continue;
 
                 let messageNeedsUpdate = false;
-                const updatePayload: Partial<CardMessage> & { tool_calls?: any[] } = {};
+                // --- MODIFICATION: Allow transient property for thinking status ---
+                const updatePayload: Partial<CardMessage> & { tool_calls?: any[]; _thinkingCompleted?: boolean } = {};
 
                 if (delta.content) {
                     aiContent += delta.content;
                     updatePayload.content = normalizeMathDelimiters(aiContent);
                     messageNeedsUpdate = true;
+                    // --- MODIFICATION: Set thinking as completed on first content delta ---
+                    if (!thinkingCompleted) {
+                        thinkingCompleted = true;
+                    }
                 }
                 
-                // --- START OF MODIFICATION ---
-                // Handle DeepSeek's proprietary `reasoning_content` field
                 if (json.choices?.[0]?.delta?.reasoning_content) {
                     const reasoningChunk = json.choices[0].delta.reasoning_content;
-
-                    // Find or create a dedicated "Reasoning" tool call object in our array
                     let reasoningCall = toolCalls.find(call => call.id === 'deepseek_reasoning');
                     if (!reasoningCall) {
-                        reasoningCall = {
-                            id: 'deepseek_reasoning',
-                            type: 'function',
-                            function: {
-                                name: 'Reasoning',
-                                arguments: '',
-                            }
-                        };
+                        reasoningCall = { id: 'deepseek_reasoning', type: 'function', function: { name: 'Reasoning', arguments: '' } };
                         toolCalls.push(reasoningCall);
                     }
-                    
-                    // Append the new reasoning text
                     reasoningCall.function.arguments += reasoningChunk;
-                    
                     updatePayload.tool_calls = JSON.parse(JSON.stringify(toolCalls));
                     messageNeedsUpdate = true;
                 }
-                // --- END OF MODIFICATION ---
 
-                // Keep the original tool_calls logic for compatibility with other APIs
                 if (delta.tool_calls) {
                     for (const chunk of delta.tool_calls) {
-                        while (toolCalls.length <= chunk.index) {
-                            toolCalls.push({});
-                        }
+                        while (toolCalls.length <= chunk.index) { toolCalls.push({}); }
                         const current = toolCalls[chunk.index];
                         if (chunk.id) current.id = chunk.id;
                         if (chunk.type) current.type = chunk.type;
@@ -326,6 +314,10 @@ export const InputArea: React.FC = () => {
                 }
 
                 if (messageNeedsUpdate) {
+                    // --- MODIFICATION: Add thinking status to every update after it's completed ---
+                    if (thinkingCompleted) {
+                        updatePayload._thinkingCompleted = true;
+                    }
                     updateMessage(cardId, aiMsgId, updatePayload);
                 }
             } catch (parseError) {
