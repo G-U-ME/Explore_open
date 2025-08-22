@@ -221,11 +221,12 @@ const MarkdownRenderer: React.FC<{
 const PreviewCard: React.FC<{
   position: { top: number; left: number };
   content: string;
+  toolCalls: any[];
   isLoading: boolean;
   onClose: () => void;
   onCreate: () => void;
   parentRef: React.RefObject<HTMLDivElement>;
-}> = ({ position, content, isLoading, onClose, onCreate, parentRef }) => {
+}> = ({ position, content, toolCalls, isLoading, onClose, onCreate, parentRef }) => {
   const cardWidth = parentRef.current ? parentRef.current.offsetWidth / 2 : 300;
   const cardHeight = parentRef.current ? parentRef.current.offsetHeight / 2 : 200;
   const cleanContent = content.replace(/@@(.*?)@@/g, '$1');
@@ -246,7 +247,10 @@ const PreviewCard: React.FC<{
         </div>
       </div>
       <div className="markdown-content w-full flex-1 overflow-y-auto min-h-0 text-sm [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#888] [&::-webkit-scrollbar-thumb]:rounded-full">
-        {isLoading && <Loader className="animate-spin text-gray-400 mx-auto mt-4" />}
+        {isLoading && toolCalls.length === 0 && !content && <Loader className="animate-spin text-gray-400 mx-auto mt-4" />}
+        {toolCalls.length > 0 && (
+          <ToolCallDisplay toolCalls={toolCalls} isStreaming={isLoading} />
+        )}
         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex, [rehypeSanitize, customSanitizeSchema]]}>
             {normalizedContent}
         </ReactMarkdown>
@@ -905,10 +909,10 @@ export const CardStack: React.FC<{
 
   const currentCardRef = useRef<HTMLDivElement>(null); 
   const streamTargetRef = useRef<{type: 'preview' | 'card', cardId?: string, messageId?: string} | null>(null);
-  const lettingStreamContinueRef = useRef(false); // MODIFICATION: Added ref to manage stream handoff.
+  const lettingStreamContinueRef = useRef(false);
 
   const navigationAction = useRef<NavigationAction>(null);
-  const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: '' });
+  const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, sourceTerm: '', toolCalls: [] as any[] });
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
   const streamAbortControllerRef = useRef<AbortController | null>(null);
 
@@ -954,7 +958,6 @@ export const CardStack: React.FC<{
   }, [currentCardId, currentCard?.messages.length, currentCard?.title, generateTitle, lastMessageContent]);
   
   const fetchAIForPreview = async (term: string) => {
-    // This function no longer needs to manage aborting previous requests itself.
     const controller = new AbortController();
     streamAbortControllerRef.current = controller;
 
@@ -978,7 +981,6 @@ export const CardStack: React.FC<{
     }
     messages.push({ role: 'user', content: userPrompt });
 
-    // Local state to "latch" the stream's target once it's handed off to a card.
     let isHandedOff = false;
     let handedOffTarget: { cardId: string; messageId: string } | null = null;
 
@@ -1004,6 +1006,7 @@ export const CardStack: React.FC<{
       const decoder = new TextDecoder();
       let buffer = '';
       let aiContent = '';
+      const toolCalls: any[] = [];
 
       mainReadLoop: while (true) {
         const { value, done } = await reader.read();
@@ -1022,30 +1025,73 @@ export const CardStack: React.FC<{
 
           try {
             const json = JSON.parse(data);
-            const delta = json.choices?.[0]?.delta?.content;
-            if (delta) {
-              aiContent += delta;
-              const normalizedContent = normalizeMathDelimiters(aiContent);
-              
-              if (controller.signal.aborted) break mainReadLoop;
+            const delta = json.choices?.[0]?.delta;
 
-              // If the stream has been handed off, it sticks to its card target
-              // and ignores any subsequent changes to the global streamTargetRef.
+            if (!delta) continue;
+            if (controller.signal.aborted) break mainReadLoop;
+
+            let updateNeeded = false;
+            let newContentPayload: string | undefined;
+            let newToolCallsPayload: any[] | undefined;
+
+            if (delta.content) {
+              aiContent += delta.content;
+              newContentPayload = normalizeMathDelimiters(aiContent);
+              updateNeeded = true;
+            }
+
+            if (json.choices?.[0]?.delta?.reasoning_content) {
+                const reasoningChunk = json.choices[0].delta.reasoning_content;
+                let reasoningCall = toolCalls.find(call => call.id === 'deepseek_reasoning');
+                if (!reasoningCall) {
+                    reasoningCall = { id: 'deepseek_reasoning', type: 'function', function: { name: 'Reasoning', arguments: '' } };
+                    toolCalls.push(reasoningCall);
+                }
+                reasoningCall.function.arguments += reasoningChunk;
+                newToolCallsPayload = JSON.parse(JSON.stringify(toolCalls));
+                updateNeeded = true;
+            }
+
+            if (delta.tool_calls) {
+                for (const chunk of delta.tool_calls) {
+                    while (toolCalls.length <= chunk.index) { toolCalls.push({}); }
+                    const current = toolCalls[chunk.index];
+                    if (chunk.id) current.id = chunk.id;
+                    if (chunk.type) current.type = chunk.type;
+                    if (chunk.function) {
+                        if (!current.function) current.function = {};
+                        if (chunk.function.name) current.function.name = chunk.function.name;
+                        if (chunk.function.arguments) {
+                            if (!current.function.arguments) current.function.arguments = "";
+                            current.function.arguments += chunk.function.arguments;
+                        }
+                    }
+                }
+                newToolCallsPayload = JSON.parse(JSON.stringify(toolCalls));
+                updateNeeded = true;
+            }
+            
+            if (updateNeeded) {
               if (isHandedOff && handedOffTarget) {
-                  updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, { content: normalizedContent });
+                  const updatePayload: Partial<CardMessage> = {};
+                  if (newContentPayload !== undefined) updatePayload.content = newContentPayload;
+                  if (newToolCallsPayload !== undefined) updatePayload.tool_calls = newToolCallsPayload;
+                  updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, updatePayload);
               }
-              // Before handoff, it updates the preview.
               else if (streamTargetRef.current?.type === 'preview') {
-                  setPreviewState((prev) => ({ ...prev, content: normalizedContent, isLoading: false }));
+                  setPreviewState(prev => ({
+                      ...prev,
+                      ...(newContentPayload !== undefined && { content: newContentPayload }),
+                      ...(newToolCallsPayload !== undefined && { toolCalls: newToolCallsPayload }),
+                  }));
               }
-              // This is the moment of handoff. Latch the target and switch behavior.
               else if (streamTargetRef.current?.type === 'card') {
                   isHandedOff = true;
-                  handedOffTarget = {
-                      cardId: streamTargetRef.current.cardId!,
-                      messageId: streamTargetRef.current.messageId!
-                  };
-                  updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, { content: normalizedContent });
+                  handedOffTarget = { cardId: streamTargetRef.current.cardId!, messageId: streamTargetRef.current.messageId! };
+                  const updatePayload: Partial<CardMessage> = {};
+                  if (newContentPayload !== undefined) updatePayload.content = newContentPayload;
+                  if (newToolCallsPayload !== undefined) updatePayload.tool_calls = newToolCallsPayload;
+                  updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, updatePayload);
               }
             }
           } catch (e) {
@@ -1058,13 +1104,14 @@ export const CardStack: React.FC<{
             console.log('Preview fetch was aborted.');
         } else {
             console.error("Preview fetch error:", error);
-            // Only show an error in the preview if the stream was never handed off.
             if (!controller.signal.aborted && !isHandedOff) {
-                setPreviewState((prev) => ({ ...prev, content: "Failed to fetch explanation.", isLoading: false }));
+                setPreviewState((prev) => ({ ...prev, content: "Failed to fetch explanation."}));
             }
         }
     } finally {
-        // No need to nullify the ref here, the useEffect handles the lifecycle.
+        if (!isHandedOff) {
+            setPreviewState(prev => ({ ...prev, isLoading: false }));
+        }
     }
   };
 
@@ -1074,7 +1121,6 @@ export const CardStack: React.FC<{
     targetMessageInfo?: { aiMessageIdToContinue: string } | { userMessageId: string },
     backgroundTopic?: string
   ) => {
-    // Abort any previously running stream before starting a new one.
     if (streamAbortControllerRef.current) {
         streamAbortControllerRef.current.abort();
     }
@@ -1204,6 +1250,7 @@ export const CardStack: React.FC<{
         isLoading: true, 
         sourceTerm: term, 
         content: '', 
+        toolCalls: [],
         top: finalTop, 
         left: finalLeft 
       };
@@ -1222,16 +1269,20 @@ export const CardStack: React.FC<{
   const handleCreateFromPreview = () => {
     if (!previewState.sourceTerm) return;
 
-    // MODIFICATION: Signal that the stream should not be aborted when the preview closes.
     lettingStreamContinueRef.current = true;
     
     navigationAction.current = 'create';
     const userMsg: CardMessage = { id: `msg_${Date.now()}_user`, role: 'user', content: previewState.sourceTerm, timestamp: Date.now() };
-    const aiMsg: CardMessage = { id: `msg_${Date.now()}_ai`, role: 'ai', content: previewState.content, timestamp: Date.now() };
+    const aiMsg: CardMessage = { 
+        id: `msg_${Date.now()}_ai`, 
+        role: 'ai', 
+        content: previewState.content, 
+        tool_calls: previewState.toolCalls,
+        timestamp: Date.now() 
+    };
     
     addCard([userMsg, aiMsg], currentCardId || undefined);
     
-    // Close the preview UI. This will trigger the useEffect's cleanup function.
     setPreviewState(p => ({...p, visible: false}));
 
     const { projects, activeProjectId } = useProjectStore.getState();
@@ -1239,10 +1290,8 @@ export const CardStack: React.FC<{
     const newCardId = activeProject?.currentCardId;
 
     if (newCardId) {
-      // Re-target the stream's output to the newly created card message.
       streamTargetRef.current = { type: 'card', cardId: newCardId, messageId: aiMsg.id };
     } else {
-      // Fallback: If we can't create the card, abort the orphaned stream.
       if (streamAbortControllerRef.current) {
         streamAbortControllerRef.current.abort();
         streamAbortControllerRef.current = null;
@@ -1280,7 +1329,6 @@ export const CardStack: React.FC<{
   const handleDelete = (id: string) => {
     navigationAction.current = 'delete';
 
-    // If the card being deleted is the target of an ongoing stream, abort it.
     if (streamTargetRef.current?.type === 'card' && streamTargetRef.current.cardId === id) {
       if (streamAbortControllerRef.current) {
         streamAbortControllerRef.current.abort();
@@ -1298,19 +1346,14 @@ export const CardStack: React.FC<{
           return animatedCards;
       }
       
-      // 判断是否处于过渡状态
       const isTransitioning = (currentCardId !== prevCardId) && prevCardId;
       const idToRender = isTransitioning ? prevCardId : currentCardId;
       
       if (!idToRender) return [];
 
-      // 【核心修改】
-      // 如果是过渡状态，就在旧的卡片列表(prevCards)中查找旧的ID。
-      // 否则，就在当前的卡片列表(cards)中查找当前的ID。
       const listToSearch = isTransitioning ? prevCards : cards;
       const stablePath = getPathFromCardList(idToRender, listToSearch);
 
-      // 如果在过渡期间查找失败（例如，prevCards还没准备好），返回空数组避免崩溃
       if (isTransitioning && stablePath.length === 0) {
           return [];
       }
@@ -1324,28 +1367,22 @@ export const CardStack: React.FC<{
               style: getFullCardStyle(depth, dimensions),
           };
       });
-  }, [animatedCards, currentCardId, prevCardId, cards, prevCards, getCardPath, dimensions]); // 确保把 prevCards 和 cards 都加入依赖数组
+  }, [animatedCards, currentCardId, prevCardId, cards, prevCards, getCardPath, dimensions]);
 
-  // MODIFICATION: Updated useEffect to handle stream lifecycle correctly.
   useEffect(() => {
     if (!previewState.visible || !previewState.sourceTerm) {
       return;
     }
 
-    // A new fetch is required.
     streamTargetRef.current = { type: 'preview' };
     fetchAIForPreview(previewState.sourceTerm);
 
-    // This cleanup function runs when the preview closes or a new term is clicked.
     return () => {
-      // If the handoff flag is set, the stream is being passed to a new card.
-      // Do NOT abort it. Just reset the flag for the next operation.
       if (lettingStreamContinueRef.current) {
         lettingStreamContinueRef.current = false;
         return;
       }
       
-      // For all other cases, abort the stream and clean up the ref.
       if (streamAbortControllerRef.current) {
         streamAbortControllerRef.current.abort();
         streamAbortControllerRef.current = null;
@@ -1373,7 +1410,6 @@ export const CardStack: React.FC<{
         .card-container.exiting-shrink-out { animation: card-shrink-out ${ANIMATION_DURATION}ms forwards ease-in-out; }
         @keyframes card-shrink-out { from { opacity: 0.8; } to { opacity: 0; transform: translate(-50%, -50%) scale(0.5); } }
 
-        /* 新增的删除动画 */
         .card-container.exiting-up-and-grow { animation: card-exit-up-and-grow ${ANIMATION_DURATION}ms forwards ease-in-out; }
         @keyframes card-exit-up-and-grow {
           to {
@@ -1449,6 +1485,7 @@ export const CardStack: React.FC<{
         <PreviewCard
           position={{ top: previewState.top, left: previewState.left }}
           content={previewState.content}
+          toolCalls={previewState.toolCalls}
           isLoading={previewState.isLoading}
           onClose={handleClosePreview}
           onCreate={handleCreateFromPreview}
