@@ -14,6 +14,16 @@ import { Node, Parent, Literal } from 'unist';
 import rehypeSanitize, {defaultSchema} from 'rehype-sanitize';
 import rehypeRaw from 'rehype-raw';
 
+// --- START OF MODIFICATION: KaTeX and mhchem Integration ---
+// Use static imports for katex and the mhchem extension.
+// The .mjs version is an ES Module that automatically patches the katex instance.
+import katex from 'katex';
+import 'katex/dist/contrib/mhchem.mjs';
+
+
+// --- END OF MODIFICATION ---
+
+
 // ================================================================================================
 // #region Helper Functions & Types
 // ================================================================================================
@@ -157,17 +167,47 @@ const remarkConceptualTerm = () => {
   };
 };
 
+// --- START OF MODIFICATION: A more robust sanitize schema for KaTeX ---
 const customSanitizeSchema = {
   ...defaultSchema,
-  tagNames: [...defaultSchema.tagNames!, 'ol', 'li'],
+  tagNames: [
+    ...defaultSchema.tagNames!, 
+    'svg', 'path', // Allow SVG elements used by KaTeX for certain symbols
+  ],
+  protocols: {
+    ...defaultSchema.protocols,
+    // 明确允许 'xmlns' 属性的值可以包含 'http' 协议。
+    // 这是让浏览器正确识别和渲染 SVG 的关键。
+    xmlns: ['http'],
+  },
   attributes: {
     ...defaultSchema.attributes,
-    span: [...(defaultSchema.attributes?.span || []), 'className', 'style'],
-    div: [...(defaultSchema.attributes?.div || []), 'className', 'style'],
-    ol: [...(defaultSchema.attributes?.ol || []), 'className', 'start'],
-    li: [...(defaultSchema.attributes?.li || []), 'className', 'checked', 'disabled'],
+    // 允许特定属性在所有标签上
+    '*': [
+      'className', 
+      'aria-hidden', // KaTeX uses this for screen readers
+      'role',
+      // 关键改动：将 CSS 属性白名单数组改回简单的 'style' 字符串。
+      // 这将允许 KaTeX 生成的所有内联样式通过，解决了布局问题。
+      'style',
+    ],
+    // 这将允许 KaTeX 用于绘制箭头、分式等结构的 span 标签保留其必要的 class 和 style。
+    span: [
+        'className', 
+        'style', 
+        'aria-hidden'
+    ],
+    svg: [ // Whitelist attributes for SVG elements
+        'xmlns', 'width', 'height', 'viewBox', 'stroke', 'fill', 
+        'strokeWidth', 'strokeLinecap', 'strokeLinejoin', 'style'
+    ],
+    path: ['d', 'style'], // Whitelist 'd' attribute for path elements
+    ol: [...(defaultSchema.attributes?.ol || []), 'start'],
+    li: [...(defaultSchema.attributes?.li || []), 'checked', 'disabled'],
   },
 };
+// --- END OF MODIFICATION ---
+
 
 interface CustomSpanProps extends React.HTMLAttributes<HTMLSpanElement> {
     children?: React.ReactNode;
@@ -177,9 +217,8 @@ interface CustomSpanProps extends React.HTMLAttributes<HTMLSpanElement> {
 const MarkdownRenderer: React.FC<{ 
   content: string; 
   onTermClick?: (term: string, rect: DOMRect) => void;
-}> = React.memo(({ content, onTermClick }) => {
-  // MODIFICATION: Memoize the customComponents object.
-  // It will only be recalculated if onTermClick changes.
+  rehypePlugins: any[]; // Pass plugins as props
+}> = React.memo(({ content, onTermClick, rehypePlugins }) => {
   const customComponents: Components = useMemo(() => ({
     span: ({ node, children, ...props }: CustomSpanProps) => {
       if (props.className === 'conceptual-term') {
@@ -201,14 +240,14 @@ const MarkdownRenderer: React.FC<{
       }
       return <span {...props}>{children}</span>;
     },
-  }), [onTermClick]); // Dependency array includes onTermClick
+  }), [onTermClick]);
 
   const normalizedContent = useMemo(() => normalizeMathDelimiters(content), [content]);
   return (
     <div className="markdown-content w-full">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkConceptualTerm, remarkMath]}
-        rehypePlugins={[rehypeRaw, rehypeKatex, [rehypeSanitize, customSanitizeSchema]]}
+        rehypePlugins={rehypePlugins}
         components={customComponents}
       >
         {normalizedContent}
@@ -223,11 +262,12 @@ const PreviewCard: React.FC<{
   content: string;
   toolCalls: any[];
   isLoading: boolean;
-  thinkingCompleted: boolean; // --- MODIFICATION: Added prop
+  thinkingCompleted: boolean;
   onClose: () => void;
   onCreate: () => void;
   parentRef: React.RefObject<HTMLDivElement>;
-}> = ({ position, content, toolCalls, isLoading, thinkingCompleted, onClose, onCreate, parentRef }) => {
+  rehypePlugins: any[]; // Pass plugins as props
+}> = ({ position, content, toolCalls, isLoading, thinkingCompleted, onClose, onCreate, parentRef, rehypePlugins }) => {
   const cardWidth = parentRef.current ? parentRef.current.offsetWidth / 2 : 300;
   const cardHeight = parentRef.current ? parentRef.current.offsetHeight / 2 : 200;
   const cleanContent = content.replace(/@@(.*?)@@/g, '$1');
@@ -250,10 +290,9 @@ const PreviewCard: React.FC<{
       <div className="markdown-content w-full flex-1 overflow-y-auto min-h-0 text-sm [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#888] [&::-webkit-scrollbar-thumb]:rounded-full">
         {isLoading && toolCalls.length === 0 && !content && <Loader className="animate-spin text-gray-400 mx-auto mt-4" />}
         {toolCalls.length > 0 && (
-           // --- MODIFICATION: Calculate isStreaming based on thinkingCompleted ---
-          <ToolCallDisplay toolCalls={toolCalls} isStreaming={isLoading && !thinkingCompleted} />
+          <ToolCallDisplay toolCalls={toolCalls} isStreaming={isLoading && !thinkingCompleted} rehypePlugins={rehypePlugins} />
         )}
-        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={[rehypeKatex, [rehypeSanitize, customSanitizeSchema]]}>
+        <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={rehypePlugins} >
             {normalizedContent}
         </ReactMarkdown>
       </div>
@@ -261,47 +300,31 @@ const PreviewCard: React.FC<{
   );
 };
 
-const ToolCallDisplay: React.FC<{ toolCalls: any[]; isStreaming: boolean; initialElapsedTime?: number; }> = ({ toolCalls, isStreaming, initialElapsedTime = 0 }) => {
+const ToolCallDisplay: React.FC<{ toolCalls: any[]; isStreaming: boolean; initialElapsedTime?: number; rehypePlugins: any[] }> = ({ toolCalls, isStreaming, initialElapsedTime = 0, rehypePlugins }) => {
   const [isExpanded, setIsExpanded] = useState(true);
-  // MODIFICATION START: Initialize state with the passed-in initial time.
   const [elapsedTime, setElapsedTime] = useState(initialElapsedTime);
-  // MODIFICATION END
   const timerRef = useRef<NodeJS.Timeout | null>(null);
 
   useEffect(() => {
-    // Start a new timer if streaming starts
     if (isStreaming) {
-      // This logic correctly resumes the timer from the current `elapsedTime` value
       const startTime = Date.now() - elapsedTime * 1000;
       timerRef.current = setInterval(() => {
         setElapsedTime(Math.round((Date.now() - startTime) / 1000));
       }, 1000);
     } else {
-      // Clear interval if it exists and streaming stops
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
     }
-
-    // Cleanup on unmount or if isStreaming changes
     return () => {
-      if (timerRef.current) {
-        clearInterval(timerRef.current);
-      }
+      if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isStreaming]);
+  }, [isStreaming, elapsedTime]);
 
-  if (!toolCalls || toolCalls.length === 0) {
-    return null;
-  }
+  if (!toolCalls || toolCalls.length === 0) return null;
 
-  // Process all tool call arguments to be rendered as Markdown.
-  // This handles the reasoning/thinking text specifically.
-  const allArguments = toolCalls
-    .map(call => call.function?.arguments || '')
-    .join('\n\n');
-
+  const allArguments = toolCalls.map(call => call.function?.arguments || '').join('\n\n');
   const cleanContent = allArguments.replace(/@@(.*?)@@/g, '$1');
   const normalizedContent = useMemo(() => normalizeMathDelimiters(cleanContent), [cleanContent]);
 
@@ -326,7 +349,7 @@ const ToolCallDisplay: React.FC<{ toolCalls: any[]; isStreaming: boolean; initia
         <div className="text-[#B4B4B4] text-xs bg-[#222222] p-2 rounded-md overflow-x-auto scrollbar-thin scrollbar-thumb-gray-500 scrollbar-track-transparent">
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex, [rehypeSanitize, customSanitizeSchema]]}
+            rehypePlugins={rehypePlugins}
           >
             {normalizedContent}
           </ReactMarkdown>
@@ -345,7 +368,8 @@ const CurrentCardDialog: React.FC<{
   onCreateFromSelection: () => void;
   onTermClick: (term: string, rect: DOMRect) => void;
   isMobile?: boolean;
-}> = ({ card, cardRef, onDelete, onCreateNew, onTextSelection, onCreateFromSelection, onTermClick, isMobile = false }) => {
+  rehypePlugins: any[]; // Pass plugins as props
+}> = ({ card, cardRef, onDelete, onCreateNew, onTextSelection, onCreateFromSelection, onTermClick, isMobile = false, rehypePlugins }) => {
   const [selectionButton, setSelectionButton] = useState({ visible: false, top: 0, left: 0 });
   const { isTyping: isGlobalTyping } = useCardStore();
 
@@ -382,14 +406,41 @@ const CurrentCardDialog: React.FC<{
       className="bg-[#222222] text-white rounded-[24px] shadow-card p-4 flex flex-col h-full w-full"
       style={{ boxShadow: '-4px 8px 24px rgba(0, 0, 0, 0.3)' }}
     >
+      {/* --- START OF MODIFICATION: Added heading styles --- */}
       <style>{`
         .conceptual-term { cursor: pointer; font-weight: 500; border-bottom: 1px dotted #888; transition: border-bottom 0.2s; }
         .conceptual-term:hover { border-bottom: 1px solid #FFF; }
+        
         .markdown-content ul, .markdown-content ol { padding-left: 1.75rem; margin-block: 0.5rem; }
         .markdown-content ol { list-style-type: decimal; }
         .markdown-content ul { list-style-type: disc; }
         .markdown-content li { margin-bottom: 0.25rem; }
+
+        /* Add these styles to restore heading appearances */
+        .markdown-content h1,
+        .markdown-content h2,
+        .markdown-content h3,
+        .markdown-content h4,
+        .markdown-content h5,
+        .markdown-content h6 {
+          font-weight: 600;
+          margin-top: 1em;
+          margin-bottom: 0.5em;
+          line-height: 1.25;
+        }
+        .markdown-content h1 { font-size: 2em; }
+        .markdown-content h2 { font-size: 1.5em; }
+        .markdown-content h3 { font-size: 1.25em; }
+        .markdown-content h4 { font-size: 1em; }
+        .markdown-content h5 { font-size: 0.875em; }
+        .markdown-content h6 { font-size: 0.85em; }
+
+        .markdown-content .katex svg path {
+          stroke: currentColor !important; /* Ensure paths use currentColor for consistency */
+          fill: currentColor !important;
+        }
       `}</style>
+      {/* --- END OF MODIFICATION --- */}
       
       {selectionButton.visible && (
         <button
@@ -427,7 +478,6 @@ const CurrentCardDialog: React.FC<{
                 );
               } else { // AI Message
                 const isLastMessage = idx === card.messages.length - 1;
-                // --- MODIFICATION: Check transient property to determine if thinking is complete ---
                 const thinkingCompleted = (msg as any)._thinkingCompleted === true;
                 const isStreaming = isGlobalTyping && isLastMessage && !thinkingCompleted;
 
@@ -437,9 +487,9 @@ const CurrentCardDialog: React.FC<{
                 return (
                   <div key={msg.id || idx} className={`${isMobile ? 'text-base' : 'text-content'} max-w-full`}>
                     {toolCalls.length > 0 && (
-                      <ToolCallDisplay toolCalls={toolCalls} isStreaming={isStreaming} initialElapsedTime={initialTime} />
+                      <ToolCallDisplay toolCalls={toolCalls} isStreaming={isStreaming} initialElapsedTime={initialTime} rehypePlugins={rehypePlugins} />
                     )}
-                    <MarkdownRenderer content={msg.content} onTermClick={onTermClick} />
+                    <MarkdownRenderer content={msg.content} onTermClick={onTermClick} rehypePlugins={rehypePlugins} />
                   </div>
                 );
               }
@@ -459,7 +509,8 @@ const ParentCard: React.FC<{
   onHoverStart: () => void;
   onHoverEnd: () => void;
   isMobile?: boolean;
-}> = ({ card, onClick, onHoverStart, onHoverEnd, isMobile = false }) => {
+  rehypePlugins: any[]; // Pass plugins as props
+}> = ({ card, onClick, onHoverStart, onHoverEnd, isMobile = false, rehypePlugins }) => {
   return (
     <div
       className="absolute top-0 left-0 w-full h-full cursor-pointer transition-all duration-300 ease-in-out bg-[#222222] rounded-[24px] shadow-card"
@@ -487,7 +538,7 @@ const ParentCard: React.FC<{
                   </div>
                 ) : (
                   <div key={msg.id || idx} className={`${isMobile ? 'text-sm' : 'text-content'} max-w-full`}>
-                    <MarkdownRenderer content={msg.content} />
+                    <MarkdownRenderer content={msg.content} rehypePlugins={rehypePlugins} />
                   </div>
                 )
               ))}
@@ -900,6 +951,7 @@ export const CardStack: React.FC<{
   centerAreaWidth: number;
   isMobile?: boolean;
 }> = ({ centerY, availableHeight, centerAreaWidth, isMobile = false }) => {
+
   const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle, appendMessage, updateMessage, setIsTyping } = useCardStore();
   const { projects, activeProjectId } = useProjectStore();
   const { apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, isWebSearchEnabled } = useSettingsStore();
@@ -926,6 +978,16 @@ export const CardStack: React.FC<{
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
   const streamAbortControllerRef = useRef<AbortController | null>(null);
   const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
+
+  // Define the rehype plugins array centrally using useMemo.
+  // This array will be passed down to all MarkdownRenderer instances.
+  const rehypePlugins = useMemo(() => {
+    return [
+      rehypeRaw,
+      [rehypeKatex, { katex: katex, trust: true, output: 'html' }],
+      [rehypeSanitize, customSanitizeSchema]
+    ];
+  }, []); // The katex object is from a static import, so it won't change. Dependency array is empty.
 
   const getPathFromCardList = (id: string, allCards: CardData[] | undefined): CardData[] => {
       const path: CardData[] = [];
@@ -1511,6 +1573,7 @@ export const CardStack: React.FC<{
                             onCreateFromSelection={handleCreateFromSelection}
                             onTermClick={handleTermClick}
                             isMobile={isMobile}
+                            rehypePlugins={rehypePlugins}
                           />
                         ) : (
                           <ParentCard 
@@ -1519,6 +1582,7 @@ export const CardStack: React.FC<{
                             onHoverStart={() => setHoveredCardId(ac.id)}
                             onHoverEnd={() => setHoveredCardId(null)}
                             isMobile={isMobile}
+                            rehypePlugins={rehypePlugins}
                           />
                         )}
                       </div>
@@ -1537,6 +1601,7 @@ export const CardStack: React.FC<{
           onClose={handleClosePreview}
           onCreate={handleCreateFromPreview}
           parentRef={currentCardRef}
+          rehypePlugins={rehypePlugins}
         />,
         portalRoot
       )}
