@@ -167,46 +167,43 @@ const remarkConceptualTerm = () => {
   };
 };
 
-// --- START OF MODIFICATION: A more robust sanitize schema for KaTeX ---
+
+// 我们将从零开始构建 schema，只从 defaultSchema 中借用我们确认需要的部分。
 const customSanitizeSchema = {
-  ...defaultSchema,
+  // 1. 我们只继承 tagNames，并安全地进行扩展。
   tagNames: [
-    ...defaultSchema.tagNames!, 
-    'svg', 'path', // Allow SVG elements used by KaTeX for certain symbols
+    ...(defaultSchema.tagNames || []),
+    'svg',
+    'path',
   ],
-  protocols: {
-    ...defaultSchema.protocols,
-    // 明确允许 'xmlns' 属性的值可以包含 'http' 协议。
-    // 这是让浏览器正确识别和渲染 SVG 的关键。
-    xmlns: ['http'],
-  },
+
+  // 2. 我们完全抛弃 defaultSchema.attributes，以消除所有不可预测的优先级冲突。
   attributes: {
-    ...defaultSchema.attributes,
-    // 允许特定属性在所有标签上
-    '*': [
-      'className', 
-      'aria-hidden', // KaTeX uses this for screen readers
-      'role',
-      // 关键改动：将 CSS 属性白名单数组改回简单的 'style' 字符串。
-      // 这将允许 KaTeX 生成的所有内联样式通过，解决了布局问题。
-      'style',
-    ],
-    // 这将允许 KaTeX 用于绘制箭头、分式等结构的 span 标签保留其必要的 class 和 style。
-    span: [
-        'className', 
-        'style', 
-        'aria-hidden'
-    ],
-    svg: [ // Whitelist attributes for SVG elements
-        'xmlns', 'width', 'height', 'viewBox', 'stroke', 'fill', 
-        'strokeWidth', 'strokeLinecap', 'strokeLinejoin', 'style'
-    ],
-    path: ['d', 'style'], // Whitelist 'd' attribute for path elements
-    ol: [...(defaultSchema.attributes?.ol || []), 'start'],
-    li: [...(defaultSchema.attributes?.li || []), 'checked', 'disabled'],
+    // 关键突破：我们在通配符 '*' 中就允许 'style' 和 'className'。
+    // 这确保了 KaTeX 生成的任何嵌套元素都能保留其样式和类。
+    '*': ['className', 'style', 'aria-hidden', 'role', 'id'],
+
+    // 为需要特殊属性的标签提供额外的白名单。
+    a: ['href', 'title', 'target', 'rel'],
+    img: ['src', 'alt', 'title', 'width', 'height'],
+    svg: ['xmlns', 'width', 'height', 'viewBox', 'fill', 'stroke'],
+    path: ['d', 'fill', 'stroke'],
+    
+    // 其他常用标签
+    h1: ['id'], h2: ['id'], h3: ['id'], h4: ['id'], h5: ['id'], h6: ['id'],
+    ol: ['start'],
+    li: ['checked', 'disabled'],
   },
+
+  // 3. 我们不再需要 protocols, clobberPrefix 等，因为我们没有继承它们。
+  // 如果你需要支持 <a href="tel:..."> 或其他协议，可以在这里手动添加：
+  // protocols: {
+  //   href: ['http', 'https', 'mailto', 'tel'],
+  // },
+
+  strip: [],
 };
-// --- END OF MODIFICATION ---
+
 
 
 interface CustomSpanProps extends React.HTMLAttributes<HTMLSpanElement> {
@@ -984,8 +981,8 @@ export const CardStack: React.FC<{
   const rehypePlugins = useMemo(() => {
     return [
       rehypeRaw,
-      [rehypeKatex, { katex: katex, trust: true, output: 'html' }],
-      [rehypeSanitize, customSanitizeSchema]
+      [rehypeSanitize, customSanitizeSchema],
+      [rehypeKatex, { katex: katex, trust: true, output: 'html' }]
     ];
   }, []); // The katex object is from a static import, so it won't change. Dependency array is empty.
 
