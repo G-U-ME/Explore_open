@@ -405,8 +405,8 @@ const CurrentCardDialog: React.FC<{
     >
       {/* --- START OF MODIFICATION: Added heading styles --- */}
       <style>{`
-        .conceptual-term { cursor: pointer; font-weight: 500; border-bottom: 1px dotted #888; transition: border-bottom 0.2s; }
-        .conceptual-term:hover { border-bottom: 1px solid #FFF; }
+        .conceptual-term { cursor: pointer; border-bottom: 1.5px dotted #c5c5c5ff; transition: border-bottom 0.2s; }
+        .conceptual-term:hover { border-bottom: 1.5px solid #FFF; }
         
         .markdown-content ul, .markdown-content ol { padding-left: 1.75rem; margin-block: 0.5rem; }
         .markdown-content ol { list-style-type: decimal; }
