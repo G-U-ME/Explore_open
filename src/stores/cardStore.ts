@@ -13,6 +13,10 @@ export interface CardMessage {
   context?: string
   timestamp?: number
   tool_calls?: any[];
+  _initialElapsedTime?: number; // The thinking time passed from a preview card
+  _thinkingCompleted?: boolean;   // A transient flag indicating if the "Thinking..." part is done
+  _thinkingDuration?: number;     // The final, persisted thinking duration in seconds (primary)
+  _previewDuration?: number;      // Fallback duration from preview timer if not saved (secondary)
 }
 
 export interface CardData {

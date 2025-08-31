@@ -264,7 +264,8 @@ const PreviewCard: React.FC<{
   onCreate: () => void;
   parentRef: React.RefObject<HTMLDivElement>;
   rehypePlugins: any[]; // Pass plugins as props
-}> = ({ position, content, toolCalls, isLoading, thinkingCompleted, onClose, onCreate, parentRef, rehypePlugins }) => {
+  elapsedTime: number; // Add elapsed time prop
+}> = ({ position, content, toolCalls, isLoading, thinkingCompleted, onClose, onCreate, parentRef, rehypePlugins, elapsedTime }) => {
   const cardWidth = parentRef.current ? parentRef.current.offsetWidth / 2 : 300;
   const cardHeight = parentRef.current ? parentRef.current.offsetHeight / 2 : 200;
   const cleanContent = content.replace(/@@(.*?)@@/g, '$1');
@@ -287,7 +288,7 @@ const PreviewCard: React.FC<{
       <div className="markdown-content w-full flex-1 overflow-y-auto min-h-0 text-sm [&::-webkit-scrollbar]:w-1 [&::-webkit-scrollbar-track]:bg-[#222222] [&::-webkit-scrollbar-thumb]:bg-[#888] [&::-webkit-scrollbar-thumb]:rounded-full">
         {isLoading && toolCalls.length === 0 && !content && <Loader className="animate-spin text-gray-400 mx-auto mt-4" />}
         {toolCalls.length > 0 && (
-          <ToolCallDisplay toolCalls={toolCalls} isStreaming={isLoading && !thinkingCompleted} rehypePlugins={rehypePlugins} />
+          <ToolCallDisplay toolCalls={toolCalls} isStreaming={isLoading && !thinkingCompleted} initialElapsedTime={elapsedTime} rehypePlugins={rehypePlugins} />
         )}
         <ReactMarkdown remarkPlugins={[remarkGfm, remarkMath]} rehypePlugins={rehypePlugins} >
             {normalizedContent}
@@ -299,25 +300,106 @@ const PreviewCard: React.FC<{
 
 const ToolCallDisplay: React.FC<{ toolCalls: any[]; isStreaming: boolean; initialElapsedTime?: number; rehypePlugins: any[] }> = ({ toolCalls, isStreaming, initialElapsedTime = 0, rehypePlugins }) => {
   const [isExpanded, setIsExpanded] = useState(true);
-  const [elapsedTime, setElapsedTime] = useState(initialElapsedTime);
+  // Use refs to preserve timer state when switching cards
+  const elapsedTimeRef = useRef<number>(initialElapsedTime);
+  const [elapsedTime, setElapsedTime] = useState<number>(initialElapsedTime);
   const timerRef = useRef<NodeJS.Timeout | null>(null);
+  const startTimeRef = useRef<number | null>(null);
+  const lastIsStreamingRef = useRef<boolean>(isStreaming);
+  const lastInitialTimeRef = useRef<number>(initialElapsedTime);
+  const componentMountedRef = useRef<boolean>(true); // Track if component is still mounted
+  const hasInitializedRef = useRef<boolean>(false); // Track if we've done initial setup
 
+  // Separate useEffect for handling initial time updates from persisted data
   useEffect(() => {
-    if (isStreaming) {
-      const startTime = Date.now() - elapsedTime * 1000;
-      timerRef.current = setInterval(() => {
-        setElapsedTime(Math.round((Date.now() - startTime) / 1000));
-      }, 1000);
-    } else {
+    // Handle the case where we first receive persisted time data
+    if (initialElapsedTime > 0 && !hasInitializedRef.current) {
+      elapsedTimeRef.current = initialElapsedTime;
+      setElapsedTime(initialElapsedTime);
+      lastInitialTimeRef.current = initialElapsedTime;
+      hasInitializedRef.current = true;
+    } else if (initialElapsedTime > 0 && initialElapsedTime !== lastInitialTimeRef.current) {
+      // Handle updates to persisted data (e.g., when switching cards or when final duration is saved)
+      elapsedTimeRef.current = initialElapsedTime;
+      setElapsedTime(initialElapsedTime);
+      lastInitialTimeRef.current = initialElapsedTime;
+
+      // Clean up any existing timer when we receive persisted data
+      if (startTimeRef.current) {
+        startTimeRef.current = null;
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+      }
+    }
+  }, [initialElapsedTime]);
+
+  // Enhanced timer management with better state persistence and cleanup
+  useEffect(() => {
+    componentMountedRef.current = true;
+
+    const prevIsStreaming = lastIsStreamingRef.current;
+    lastIsStreamingRef.current = isStreaming;
+
+    // Handle streaming state changes
+    if (isStreaming !== prevIsStreaming) {
+      if (isStreaming) {
+        // Streaming started: use the old logic to calculate start time from elapsed time
+        if (!startTimeRef.current) {
+          const startTime = Date.now() - elapsedTime * 1000;
+          startTimeRef.current = startTime;
+
+          if (timerRef.current) {
+            clearInterval(timerRef.current);
+          }
+
+          timerRef.current = setInterval(() => {
+            if (!componentMountedRef.current || startTimeRef.current === null) return;
+
+            try {
+              const currentTime = Math.round((Date.now() - startTimeRef.current) / 1000);
+              // Prevent negative or excessive values
+              const safeTime = Math.max(0, Math.min(currentTime, 86400)); // Max 24 hours
+
+              elapsedTimeRef.current = safeTime;
+              setElapsedTime(safeTime);
+            } catch (error) {
+              console.warn('Timer update error:', error);
+            }
+          }, 1000);
+        }
+      } else {
+        // Streaming stopped: finalize timer
+        if (timerRef.current) {
+          clearInterval(timerRef.current);
+          timerRef.current = null;
+        }
+
+        if (startTimeRef.current) {
+          try {
+            const finalTime = Math.round((Date.now() - startTimeRef.current) / 1000);
+            const safeFinalTime = Math.max(0, Math.min(finalTime, 86400));
+
+            elapsedTimeRef.current = safeFinalTime;
+            setElapsedTime(safeFinalTime);
+            startTimeRef.current = null;
+          } catch (error) {
+            console.warn('Timer finalization error:', error);
+          }
+        }
+      }
+    }
+
+    // Cleanup function
+    return () => {
+      componentMountedRef.current = false;
       if (timerRef.current) {
         clearInterval(timerRef.current);
         timerRef.current = null;
       }
-    }
-    return () => {
-      if (timerRef.current) clearInterval(timerRef.current);
     };
-  }, [isStreaming, elapsedTime]);
+  }, [isStreaming]);
 
   if (!toolCalls || toolCalls.length === 0) return null;
 
@@ -479,7 +561,13 @@ const CurrentCardDialog: React.FC<{
                 const isStreaming = isGlobalTyping && isLastMessage && !thinkingCompleted;
 
                 const toolCalls = (msg.tool_calls && Array.isArray(msg.tool_calls)) ? msg.tool_calls : [];
-                const initialTime = (msg as any)._initialElapsedTime;
+                
+                // --- START OF MODIFICATION ---
+                // Enhanced timing fallback logic with multiple sources
+                const initialTime = (msg as any)._thinkingDuration ??
+                                  (msg as any)._previewDuration ??
+                                  (msg as any)._initialElapsedTime ?? 0;
+                // --- END OF MODIFICATION ---
 
                 return (
                   <div key={msg.id || idx} className={`${isMobile ? 'text-base' : 'text-content'} max-w-full`}>
@@ -970,21 +1058,18 @@ export const CardStack: React.FC<{
   const lettingStreamContinueRef = useRef(false);
 
   const navigationAction = useRef<NavigationAction>(null);
-  // --- MODIFICATION: Added `thinkingCompleted` to preview state ---
   const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, thinkingCompleted: false, sourceTerm: '', toolCalls: [] as any[], elapsedTime: 0 });
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
   const streamAbortControllerRef = useRef<AbortController | null>(null);
   const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Define the rehype plugins array centrally using useMemo.
-  // This array will be passed down to all MarkdownRenderer instances.
   const rehypePlugins = useMemo(() => {
     return [
       rehypeRaw,
       [rehypeSanitize, customSanitizeSchema],
       [rehypeKatex, { katex: katex, trust: true, output: 'html' }]
     ];
-  }, []); // The katex object is from a static import, so it won't change. Dependency array is empty.
+  }, []);
 
   const getPathFromCardList = (id: string, allCards: CardData[] | undefined): CardData[] => {
       const path: CardData[] = [];
@@ -1028,20 +1113,17 @@ export const CardStack: React.FC<{
     const controller = new AbortController();
     streamAbortControllerRef.current = controller;
 
-    // --- MODIFICATION: Set global typing indicator for preview streams ---
     setIsTyping(true);
 
+    // Clear existing timer
     if (previewTimerRef.current) clearInterval(previewTimerRef.current);
-    const startTime = Date.now();
-    previewTimerRef.current = setInterval(() => {
-        setPreviewState(prev => ({...prev, elapsedTime: Math.round((Date.now() - startTime) / 1000) }));
-    }, 1000);
+    let startTime: number | null = null; // Initialize start time
 
     if (!apiUrl || !apiKey || !activeModel) {
       setPreviewState((prev) => ({ ...prev, content: "API settings are missing.", isLoading: false }));
       return;
     }
-    
+
     const currentCard = cards.find(c => c.id === currentCardId);
     const backgroundTopic = currentCard?.title;
 
@@ -1059,6 +1141,7 @@ export const CardStack: React.FC<{
 
     let isHandedOff = false;
     let handedOffTarget: { cardId: string; messageId: string } | null = null;
+    let isFirstContent = true;
 
     try {
       const requestBody: any = { model: activeModel, messages, stream: true };
@@ -1066,7 +1149,7 @@ export const CardStack: React.FC<{
         requestBody.enable_search = true;
         requestBody.search_options = { provider: "biying" };
       }
-      
+
       const res = await fetch(apiUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
@@ -1083,7 +1166,7 @@ export const CardStack: React.FC<{
       let buffer = '';
       let aiContent = '';
       const toolCalls: any[] = [];
-      let thinkingCompleted = false; // --- MODIFICATION: Added flag
+      let thinkingCompleted = false;
 
       mainReadLoop: while (true) {
         const { value, done } = await reader.read();
@@ -1096,13 +1179,13 @@ export const CardStack: React.FC<{
           buffer = buffer.substring(boundary + 1);
 
           if (line === '' || !line.startsWith('data: ')) continue;
-          
+
           const data = line.substring(6);
           if (data === '[DONE]') break mainReadLoop;
 
-          try {
-            const json = JSON.parse(data);
-            const delta = json.choices?.[0]?.delta;
+            try {
+                const json = JSON.parse(data);
+                const delta = json.choices?.[0]?.delta || json.delta || json;
 
             if (!delta) continue;
             if (controller.signal.aborted) break mainReadLoop;
@@ -1112,10 +1195,20 @@ export const CardStack: React.FC<{
             let newToolCallsPayload: any[] | undefined;
 
             if (delta.content) {
+              // Track start time when first content chunk arrives
+              if (isFirstContent) {
+                startTime = Date.now();
+                isFirstContent = false;
+                // Start the timer when actual content begins streaming
+                previewTimerRef.current = setInterval(() => {
+                  if (startTime) {
+                    setPreviewState(prev => ({...prev, elapsedTime: startTime ? Math.ceil((Date.now() - startTime) / 1000) : 0 }));
+                  }
+                }, 1000);
+              }
               aiContent += delta.content;
               newContentPayload = normalizeMathDelimiters(aiContent);
               updateNeeded = true;
-              // --- MODIFICATION: Flag thinking as complete ---
               if (!thinkingCompleted) {
                   thinkingCompleted = true;
               }
@@ -1127,6 +1220,16 @@ export const CardStack: React.FC<{
                 if (!reasoningCall) {
                     reasoningCall = { id: 'deepseek_reasoning', type: 'function', function: { name: 'Reasoning', arguments: '' } };
                     toolCalls.push(reasoningCall);
+                    // Start timing when first reasoning content is received
+                    if (startTime === null) {
+                        startTime = Date.now();
+                        // Start the timer when actual reasoning begins streaming
+                        previewTimerRef.current = setInterval(() => {
+                            if (startTime) {
+                                setPreviewState(prev => ({...prev, elapsedTime: startTime ? Math.ceil((Date.now() - startTime) / 1000) : 0 }));
+                            }
+                        }, 1000);
+                    }
                 }
                 reasoningCall.function.arguments += reasoningChunk;
                 newToolCallsPayload = JSON.parse(JSON.stringify(toolCalls));
@@ -1151,10 +1254,9 @@ export const CardStack: React.FC<{
                 newToolCallsPayload = JSON.parse(JSON.stringify(toolCalls));
                 updateNeeded = true;
             }
-            
+
             if (updateNeeded) {
               if (isHandedOff && handedOffTarget) {
-                  // --- MODIFICATION: Add transient property for handoff ---
                   const updatePayload: Partial<CardMessage> & { _thinkingCompleted?: boolean } = {};
                   if (newContentPayload !== undefined) updatePayload.content = newContentPayload;
                   if (newToolCallsPayload !== undefined) updatePayload.tool_calls = newToolCallsPayload;
@@ -1162,7 +1264,6 @@ export const CardStack: React.FC<{
                   updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, updatePayload);
               }
               else if (streamTargetRef.current?.type === 'preview') {
-                  // --- MODIFICATION: Update thinking state for preview ---
                   setPreviewState(prev => ({
                       ...prev,
                       ...(newContentPayload !== undefined && { content: newContentPayload }),
@@ -1195,13 +1296,19 @@ export const CardStack: React.FC<{
             }
         }
     } finally {
-        // --- MODIFICATION: Turn off global typing indicator ---
         setIsTyping(false);
+
+        if (isHandedOff && handedOffTarget && startTime !== null) {
+            const finalElapsedTime = Math.ceil((Date.now() - startTime) / 1000);
+            updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, {
+                _thinkingDuration: finalElapsedTime,
+            });
+        }
 
         if (!isHandedOff) {
             setPreviewState(prev => ({ ...prev, isLoading: false }));
         }
-        
+
         if (previewTimerRef.current) {
             clearInterval(previewTimerRef.current);
             previewTimerRef.current = null;
@@ -1210,8 +1317,8 @@ export const CardStack: React.FC<{
   };
 
   const fetchLLMStreamForNewCard = useCallback(async (
-    cardId: string, 
-    history: CardMessage[], 
+    cardId: string,
+    history: CardMessage[],
     targetMessageInfo?: { aiMessageIdToContinue: string } | { userMessageId: string },
     backgroundTopic?: string
   ) => {
@@ -1223,6 +1330,7 @@ export const CardStack: React.FC<{
 
     let aiMsgId: string;
     let initialContent = '';
+    let startTime: number | null = null;
 
     if (targetMessageInfo && 'aiMessageIdToContinue' in targetMessageInfo) {
         aiMsgId = targetMessageInfo.aiMessageIdToContinue;
@@ -1235,7 +1343,7 @@ export const CardStack: React.FC<{
         aiMsgId = userMsgId ? `${userMsgId}_ai` : `msg_${Date.now()}_ai`;
         appendMessage(cardId, { id: aiMsgId, role: 'ai', content: '', timestamp: Date.now() });
     }
-    
+
     streamTargetRef.current = { type: 'card', cardId, messageId: aiMsgId };
 
     if (!apiUrl || !apiKey || !activeModel) {
@@ -1255,7 +1363,7 @@ export const CardStack: React.FC<{
                 userMessage.content = `Background Topic: "${backgroundTopic}"\n\nQuestion:\n${userMessage.content}`;
             }
         }
-        
+
         const systemPromptContent = [globalSystemPrompt, dialogueSystemPrompt].filter(Boolean).join('\n\n');
         const messagesForApi: any[] = [...apiMessages];
         if (systemPromptContent) {
@@ -1278,6 +1386,10 @@ export const CardStack: React.FC<{
         const decoder = new TextDecoder();
         let buffer = '';
         let aiContent = initialContent;
+        let isFirstChunk = true; // Consolidated first chunk flag
+        let allToolCalls: any[] = [];
+        let thinkingCompleted = false;
+
         mainReadLoop: while (true) {
             if (controller.signal.aborted) break;
             const { value, done } = await reader.read();
@@ -1292,11 +1404,75 @@ export const CardStack: React.FC<{
                 if (data === '[DONE]') break mainReadLoop;
                 try {
                     const json = JSON.parse(data);
-                    const delta = json.choices?.[0]?.delta?.content;
-                    if (delta) {
-                        aiContent += delta;
-                        const normalizedContent = normalizeMathDelimiters(aiContent);
-                        updateMessage(cardId, aiMsgId, { content: normalizedContent });
+                    const delta = json.choices?.[0]?.delta || json.delta || json;
+
+                    if (!delta) continue;
+
+                    let reasoningCall: any;
+
+                    let updateNeeded = false;
+                    let newContentPayload: string | undefined;
+                    let newToolCallsPayload: any[] | undefined;
+
+                    // Consolidated timing start on first reasoning OR content
+                    if (delta.reasoning_content || delta.content) {
+                        // Start timing on first meaningful chunk (reasoning or content)
+                        if (isFirstChunk) {
+                            startTime = Date.now();
+                            isFirstChunk = false;
+                        }
+                    }
+
+                    // Handle reasoning content
+                    if (delta.reasoning_content) {
+                        const reasoningChunk = delta.reasoning_content;
+                        if (!reasoningCall) {
+                            reasoningCall = { id: 'deepseek_reasoning', type: 'function', function: { name: 'Reasoning', arguments: '' } };
+                            allToolCalls.push(reasoningCall);
+                        }
+                        reasoningCall.function.arguments += reasoningChunk;
+                        newToolCallsPayload = JSON.parse(JSON.stringify(allToolCalls));
+                        updateNeeded = true;
+                    }
+
+                    // Handle regular content
+                    if (delta.content) {
+                        aiContent += delta.content;
+                        newContentPayload = normalizeMathDelimiters(aiContent);
+                        updateNeeded = true;
+                        if (!thinkingCompleted) {
+                            thinkingCompleted = true;
+                        }
+                    }
+
+                    // Handle tool calls
+                    if (delta.tool_calls) {
+                        for (const chunk of delta.tool_calls) {
+                            while (allToolCalls.length <= chunk.index) {
+                                allToolCalls.push({});
+                            }
+                            const current = allToolCalls[chunk.index];
+                            if (chunk.id) current.id = chunk.id;
+                            if (chunk.type) current.type = chunk.type;
+                            if (chunk.function) {
+                                if (!current.function) current.function = {};
+                                if (chunk.function.name) current.function.name = chunk.function.name;
+                                if (chunk.function.arguments) {
+                                    if (!current.function.arguments) current.function.arguments = "";
+                                    current.function.arguments += chunk.function.arguments;
+                                }
+                            }
+                        }
+                        newToolCallsPayload = JSON.parse(JSON.stringify(allToolCalls));
+                        updateNeeded = true;
+                    }
+
+                    if (updateNeeded) {
+                        const updatePayload: Partial<CardMessage> & { _thinkingCompleted?: boolean } = {};
+                        if (newContentPayload !== undefined) updatePayload.content = newContentPayload;
+                        if (newToolCallsPayload !== undefined) updatePayload.tool_calls = newToolCallsPayload;
+                        if (thinkingCompleted) updatePayload._thinkingCompleted = true;
+                        updateMessage(cardId, aiMsgId, updatePayload);
                     }
                 } catch (e) {
                     console.warn('Stream parsing error:', e, 'in line:', line);
@@ -1317,6 +1493,15 @@ export const CardStack: React.FC<{
             streamAbortControllerRef.current = null;
             streamTargetRef.current = null;
         }
+
+        // --- START OF MODIFICATION: Save final thinking duration ---
+        if (!controller.signal.aborted && startTime !== null) {
+            const finalElapsedTime = Math.ceil((Date.now() - startTime) / 1000);
+            updateMessage(cardId, aiMsgId, {
+                _thinkingDuration: finalElapsedTime,
+            });
+        }
+        // --- END OF MODIFICATION ---
     }
   }, [apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, appendMessage, updateMessage]);
 
@@ -1339,7 +1524,6 @@ export const CardStack: React.FC<{
       if (prevState.sourceTerm === term && prevState.visible) {
         return { ...prevState, visible: false, sourceTerm: '', elapsedTime: 0 };
       }
-      // --- MODIFICATION: Reset thinkingCompleted on new term click ---
       return { 
         visible: true, 
         isLoading: true, 
@@ -1371,7 +1555,6 @@ export const CardStack: React.FC<{
     navigationAction.current = 'create';
     const userMsg: CardMessage = { id: `msg_${Date.now()}_user`, role: 'user', content: previewState.sourceTerm, timestamp: Date.now() };
     
-    // --- MODIFICATION: Persist thinking state when creating card ---
     const aiMsg: CardMessage & { _initialElapsedTime?: number; _thinkingCompleted?: boolean } = { 
         id: `msg_${Date.now()}_ai`, 
         role: 'ai', 
@@ -1468,7 +1651,7 @@ export const CardStack: React.FC<{
               style: getFullCardStyle(depth, dimensions),
           };
       });
-  }, [animatedCards, currentCardId, prevCardId, cards, prevCards, getCardPath, dimensions]);
+  }, [animatedCards, currentCardId, prevCardId, cards, prevCards, getPathFromCardList, dimensions]);
 
   useEffect(() => {
     if (!previewState.visible || !previewState.sourceTerm) {
@@ -1536,6 +1719,14 @@ export const CardStack: React.FC<{
               </div>
             ) : (
               cardsToRender.map(ac => {
+                  // --- START OF MODIFICATION: Always use fresh card data ---
+                  // Find the most up-to-date card data from the store using the ID.
+                  // The `ac.card` in the animated object can be stale during animations.
+                  const latestCardData = cards.find(c => c.id === ac.id);
+                  // Fallback to the animated card's data if it's somehow been deleted mid-animation.
+                  const cardToRender = latestCardData || ac.card;
+                  // --- END OF MODIFICATION ---
+                  
                   const isAnimating = animatedCards.length > 0;
                   const isTopCard = !isAnimating && ac.id === currentCardId;
                   const isHovered = !isTopCard && !isAnimating && ac.id === hoveredCardId;
@@ -1562,7 +1753,7 @@ export const CardStack: React.FC<{
                       <div style={{ pointerEvents: 'auto', width: '100%', height: '100%' }}>
                         {showCurrentDialog ? (
                           <CurrentCardDialog
-                            card={ac.card}
+                            card={cardToRender} // Use the fresh data
                             cardRef={isTopCard ? currentCardRef : undefined}
                             onDelete={() => handleDelete(ac.id)}
                             onCreateNew={() => handleCreateCard([], ac.id)}
@@ -1574,7 +1765,7 @@ export const CardStack: React.FC<{
                           />
                         ) : (
                           <ParentCard 
-                            card={ac.card} 
+                            card={cardToRender} // Use the fresh data
                             onClick={() => !isAnimating && setCurrentCard(ac.id)}
                             onHoverStart={() => setHoveredCardId(ac.id)}
                             onHoverEnd={() => setHoveredCardId(null)}
@@ -1594,11 +1785,12 @@ export const CardStack: React.FC<{
           content={previewState.content}
           toolCalls={previewState.toolCalls}
           isLoading={previewState.isLoading}
-          thinkingCompleted={previewState.thinkingCompleted} // --- MODIFICATION: Pass prop
+          thinkingCompleted={previewState.thinkingCompleted}
           onClose={handleClosePreview}
           onCreate={handleCreateFromPreview}
           parentRef={currentCardRef}
           rehypePlugins={rehypePlugins}
+          elapsedTime={previewState.elapsedTime}
         />,
         portalRoot
       )}

@@ -156,6 +156,9 @@ export const InputArea: React.FC = () => {
       return;
     }
 
+    let thinkingStartTime: number | null = null;
+    let thinkingTimer: ReturnType<typeof setInterval> | null = null;
+    
     try {
       // Find background topic from parent card's title
       const { projects, activeProjectId } = useProjectStore.getState();
@@ -264,26 +267,43 @@ export const InputArea: React.FC = () => {
             if (data === '[DONE]') break mainReadLoop;
             try {
                 const json = JSON.parse(data);
-                const delta = json.choices?.[0]?.delta;
+                const delta = json.choices?.[0]?.delta || json.delta || json;
 
                 if (!delta) continue;
 
+                if (delta.reasoning_content && thinkingStartTime === null) {
+                    thinkingStartTime = Date.now();
+                    if (thinkingTimer) clearInterval(thinkingTimer);
+                    thinkingTimer = setInterval(() => {
+                      if (thinkingStartTime) {
+                        const elapsedSeconds = Math.floor((Date.now() - thinkingStartTime) / 1000);
+                        updateMessage(cardId, aiMsgId, { _previewDuration: elapsedSeconds });
+                      }
+                    }, 1000);
+                }
+
                 let messageNeedsUpdate = false;
-                // --- MODIFICATION: Allow transient property for thinking status ---
-                const updatePayload: Partial<CardMessage> & { tool_calls?: any[]; _thinkingCompleted?: boolean } = {};
+                const updatePayload: Partial<CardMessage> & { tool_calls?: any[]; _thinkingCompleted?: boolean; _thinkingDuration?: number; } = {};
 
                 if (delta.content) {
                     aiContent += delta.content;
                     updatePayload.content = normalizeMathDelimiters(aiContent);
                     messageNeedsUpdate = true;
-                    // --- MODIFICATION: Set thinking as completed on first content delta ---
                     if (!thinkingCompleted) {
                         thinkingCompleted = true;
+                        if (thinkingTimer) {
+                          clearInterval(thinkingTimer);
+                          thinkingTimer = null;
+                        }
+                        if (thinkingStartTime !== null) {
+                            const finalElapsedTime = Math.ceil((Date.now() - thinkingStartTime) / 1000);
+                            updatePayload._thinkingDuration = finalElapsedTime;
+                        }
                     }
                 }
                 
-                if (json.choices?.[0]?.delta?.reasoning_content) {
-                    const reasoningChunk = json.choices[0].delta.reasoning_content;
+                if (delta.reasoning_content) {
+                    const reasoningChunk = delta.reasoning_content;
                     let reasoningCall = toolCalls.find(call => call.id === 'deepseek_reasoning');
                     if (!reasoningCall) {
                         reasoningCall = { id: 'deepseek_reasoning', type: 'function', function: { name: 'Reasoning', arguments: '' } };
@@ -325,11 +345,35 @@ export const InputArea: React.FC = () => {
             }
         }
       }
+
+      // After the stream is complete, check if thinking was started but not finished
+      // (e.g., reasoning content was received, but no main content to trigger completion)
+      const finalState = useProjectStore.getState();
+      const finalProject = finalState.projects.find(p => p.id === finalState.activeProjectId);
+      const finalCard = finalProject?.cards.find(c => c.id === cardId);
+      const finalAiMessage = finalCard?.messages.find(m => m.id === aiMsgId);
+
+      // If thinking started (we have a start time) but it wasn't marked as completed
+      if (thinkingStartTime !== null && finalAiMessage && !finalAiMessage._thinkingCompleted) {
+        if (thinkingTimer) {
+          clearInterval(thinkingTimer);
+          thinkingTimer = null;
+        }
+        const finalElapsedTime = Math.ceil((Date.now() - thinkingStartTime) / 1000);
+        updateMessage(cardId, aiMsgId, {
+          _thinkingDuration: finalElapsedTime,
+          _thinkingCompleted: true,
+        });
+      }
     } catch (error) {
       console.error('LLM API调用失败:', error);
       const errorMessage = 'AI回复失败，请检查模型是否支持视觉、API Key或网络连接。';
       updateMessage(cardId, aiMsgId, { content: errorMessage });
     } finally {
+      if (thinkingTimer) {
+        clearInterval(thinkingTimer);
+      }
+
       setLocalIsTyping(false);
       setGlobalIsTyping(false);
     }
