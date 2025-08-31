@@ -450,7 +450,7 @@ const CurrentCardDialog: React.FC<{
   rehypePlugins: any[]; // Pass plugins as props
 }> = ({ card, cardRef, onDelete, onCreateNew, onTextSelection, onCreateFromSelection, onTermClick, isMobile = false, rehypePlugins }) => {
   const [selectionButton, setSelectionButton] = useState({ visible: false, top: 0, left: 0 });
-  const { isTyping: isGlobalTyping } = useCardStore();
+  const { activeStreams } = useCardStore();
 
   const handleTextSelection = useCallback(() => {
     const selection = window.getSelection();
@@ -558,7 +558,7 @@ const CurrentCardDialog: React.FC<{
               } else { // AI Message
                 const isLastMessage = idx === card.messages.length - 1;
                 const thinkingCompleted = (msg as any)._thinkingCompleted === true;
-                const isStreaming = isGlobalTyping && isLastMessage && !thinkingCompleted;
+                const isStreaming = activeStreams.includes(msg.id) && isLastMessage && !thinkingCompleted;
 
                 const toolCalls = (msg.tool_calls && Array.isArray(msg.tool_calls)) ? msg.tool_calls : [];
                 
@@ -1037,7 +1037,7 @@ export const CardStack: React.FC<{
   isMobile?: boolean;
 }> = ({ centerY, availableHeight, centerAreaWidth, isMobile = false }) => {
 
-  const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle, appendMessage, updateMessage, setIsTyping } = useCardStore();
+  const { addCard, setCurrentCard, getCardPath, deleteCardAndDescendants, setSelectedContent, selectedContent, generateTitle, appendMessage, updateMessage, addActiveStream, removeActiveStream } = useCardStore();
   const { projects, activeProjectId } = useProjectStore();
   const { apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, isWebSearchEnabled } = useSettingsStore();
 
@@ -1112,8 +1112,8 @@ export const CardStack: React.FC<{
   const fetchAIForPreview = async (term: string) => {
     const controller = new AbortController();
     streamAbortControllerRef.current = controller;
-
-    setIsTyping(true);
+    const streamId = `preview_${Date.now()}`;
+    addActiveStream(streamId);
 
     // Clear existing timer
     if (previewTimerRef.current) clearInterval(previewTimerRef.current);
@@ -1285,7 +1285,7 @@ export const CardStack: React.FC<{
             console.warn('Stream parsing error:', e);
           }
         }
-      }
+        }
     } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') {
             console.log('Preview fetch was aborted.');
@@ -1296,7 +1296,7 @@ export const CardStack: React.FC<{
             }
         }
     } finally {
-        setIsTyping(false);
+        removeActiveStream(streamId);
 
         if (isHandedOff && handedOffTarget && startTime !== null) {
             const finalElapsedTime = Math.ceil((Date.now() - startTime) / 1000);

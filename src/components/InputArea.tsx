@@ -23,7 +23,8 @@ export const InputArea: React.FC = () => {
     addCard, 
     appendMessage, 
     updateMessage, 
-    setIsTyping: setGlobalIsTyping, 
+    addActiveStream,
+    removeActiveStream,
     selectedContent, 
     setSelectedContent,
   } = useCardStore();
@@ -84,7 +85,6 @@ export const InputArea: React.FC = () => {
     }
 
     setLocalIsTyping(true);
-    setGlobalIsTyping(true);
 
     try {
       const userMsgId = `msg_${Date.now()}_${Math.random().toString(36).slice(2)}`;
@@ -133,7 +133,6 @@ export const InputArea: React.FC = () => {
       alert('发送消息失败，请重试');
     } finally {
       setLocalIsTyping(false);
-      setGlobalIsTyping(false);
     }
   };
 
@@ -146,13 +145,15 @@ export const InputArea: React.FC = () => {
       content: '',
       timestamp: Date.now()
     };
+    
+    addActiveStream(aiMsgId);
     appendMessage(cardId, initialAiMessage);
 
     if (!apiUrl) {
       const errorMessage = 'API URL 未设置。';
       updateMessage(cardId, aiMsgId, { content: errorMessage });
       setLocalIsTyping(false);
-      setGlobalIsTyping(false);
+      removeActiveStream(aiMsgId);
       return;
     }
 
@@ -374,8 +375,8 @@ export const InputArea: React.FC = () => {
         clearInterval(thinkingTimer);
       }
 
+      removeActiveStream(aiMsgId);
       setLocalIsTyping(false);
-      setGlobalIsTyping(false);
     }
   };
 

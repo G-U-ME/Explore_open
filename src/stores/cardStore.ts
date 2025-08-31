@@ -54,7 +54,7 @@ const updateActiveProject = (updates: Partial<import('./projectStore').Project>)
 interface CardState {
   // cards and currentCardId are now derived from projectStore
   selectedContent: string | null;
-  isTyping: boolean;
+  activeStreams: string[]; // Replaces isTyping
 
   // Actions now operate on the active project's data
   addCard: (messages?: CardMessage[], parentId?: string) => void;
@@ -64,7 +64,8 @@ interface CardState {
   deleteCardAndDescendants: (id: string) => void;
   setCurrentCard: (id: string | null) => void;
   setSelectedContent: (content: string | null) => void;
-  setIsTyping: (typing: boolean) => void;
+  addActiveStream: (streamId: string) => void;
+  removeActiveStream: (streamId: string) => void;
   generateTitle: (id: string) => Promise<void>;
   getCardPath: (id: string) => CardData[];
   createCardFromSelection: (selectedText: string, parentId?: string) => void;
@@ -188,7 +189,7 @@ const useCardStore = create<CardState>()(
   devtools(
     (set, get) => ({
       selectedContent: null,
-      isTyping: false,
+      activeStreams: [],
 
       addCard: (messages = [], parentId) => {
         const { cards } = getActiveProjectData();
@@ -301,7 +302,9 @@ const useCardStore = create<CardState>()(
 
       setSelectedContent: (content) => set({ selectedContent: content }),
 
-      setIsTyping: (typing) => set({ isTyping: typing }),
+      addActiveStream: (streamId) => set(state => ({ activeStreams: [...state.activeStreams, streamId] })),
+      
+      removeActiveStream: (streamId) => set(state => ({ activeStreams: state.activeStreams.filter(id => id !== streamId) })),
 
       generateTitle: async (id) => {
         const { cards } = getActiveProjectData();
