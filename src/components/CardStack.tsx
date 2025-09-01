@@ -1054,13 +1054,21 @@ export const CardStack: React.FC<{
   const prevCardId = usePrevious(currentCardId);
 
   const currentCardRef = useRef<HTMLDivElement>(null); 
-  const streamTargetRef = useRef<{type: 'preview' | 'card', cardId?: string, messageId?: string} | null>(null);
-  const lettingStreamContinueRef = useRef(false);
+  
+  // --- START OF MODIFICATION: Replace single AbortController with a Map ---
+  // This map stores an AbortController for each active stream, keyed by a unique streamId.
+  // This allows concurrent streams (e.g., one for a card, one for a preview) to be managed independently.
+  const streamControllersRef = useRef(new Map<string, AbortController>());
+
+  // This map will store the "continuation target" for a preview stream after it's been converted to a card.
+  // Key: The original preview stream's ID (e.g., 'preview_12345').
+  // Value: The target card and message ID ({ cardId: '...', messageId: '...' }).
+  const streamContinuationMapRef = useRef(new Map<string, { cardId: string; messageId: string }>());
+  // --- END OF MODIFICATION ---
 
   const navigationAction = useRef<NavigationAction>(null);
   const [previewState, setPreviewState] = useState({ visible: false, top: 0, left: 0, content: '', isLoading: false, thinkingCompleted: false, sourceTerm: '', toolCalls: [] as any[], elapsedTime: 0, streamId: null as string | null });
   const [portalRoot, setPortalRoot] = useState<HTMLElement | null>(null);
-  const streamAbortControllerRef = useRef<AbortController | null>(null);
   const previewTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const rehypePlugins = useMemo(() => {
@@ -1109,21 +1117,20 @@ export const CardStack: React.FC<{
     return () => clearTimeout(timer);
   }, [currentCardId, currentCard?.messages.length, currentCard?.title, generateTitle, lastMessageContent]);
   
-  const fetchAIForPreview = async (term: string, streamId: string) => {
-    const controller = new AbortController();
-    streamAbortControllerRef.current = controller;
+  // --- START OF MODIFICATION: Modified fetch function to accept an AbortController ---
+  const fetchAIForPreview = async (term: string, streamId: string, controller: AbortController) => {
+  // --- END OF MODIFICATION ---
     addActiveStream(streamId);
 
-    // --- MODIFICATION: Use more robust timer state management ---
     if (previewTimerRef.current) {
       clearInterval(previewTimerRef.current);
       previewTimerRef.current = null;
     }
     let thinkingStartTime: number | null = null;
-    // --- END MODIFICATION ---
 
     if (!apiUrl || !apiKey || !activeModel) {
       setPreviewState((prev) => ({ ...prev, content: "API settings are missing.", isLoading: false }));
+      removeActiveStream(streamId);
       return;
     }
 
@@ -1142,8 +1149,6 @@ export const CardStack: React.FC<{
     }
     messages.push({ role: 'user', content: userPrompt });
 
-    let isHandedOff = false;
-    let handedOffTarget: { cardId: string; messageId: string } | null = null;
     let thinkingCompleted = false;
     
     try {
@@ -1157,7 +1162,7 @@ export const CardStack: React.FC<{
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
         body: JSON.stringify(requestBody),
-        signal: controller.signal,
+        signal: controller.signal, // Use the passed-in controller's signal
       });
 
       if (!res.ok || !res.body) {
@@ -1196,14 +1201,20 @@ export const CardStack: React.FC<{
             let newContentPayload: string | undefined;
             let newToolCallsPayload: any[] | undefined;
 
-            // --- START OF MODIFICATION: Refactored Timer Logic ---
+            const continuationTargetForTimer = streamContinuationMapRef.current.get(streamId);
+            const currentTargetIsCard = !!continuationTargetForTimer;
+
             if (delta.reasoning_content && thinkingStartTime === null) {
               thinkingStartTime = Date.now();
               if (previewTimerRef.current) clearInterval(previewTimerRef.current);
               previewTimerRef.current = setInterval(() => {
                 if (thinkingStartTime) {
                   const elapsedSeconds = Math.floor((Date.now() - thinkingStartTime) / 1000);
-                  setPreviewState(prev => ({ ...prev, elapsedTime: elapsedSeconds }));
+                  if (currentTargetIsCard) {
+                    updateMessage(continuationTargetForTimer.cardId, continuationTargetForTimer.messageId, { _previewDuration: elapsedSeconds });
+                  } else {
+                    setPreviewState(prev => prev.streamId === streamId ? { ...prev, elapsedTime: elapsedSeconds } : prev);
+                  }
                 }
               }, 1000);
             }
@@ -1214,15 +1225,17 @@ export const CardStack: React.FC<{
               updateNeeded = true;
               if (!thinkingCompleted) {
                 thinkingCompleted = true;
-                // Stop the timer as soon as main content arrives
                 if (previewTimerRef.current) {
                   clearInterval(previewTimerRef.current);
                   previewTimerRef.current = null;
                 }
                 if (thinkingStartTime !== null) {
                   const finalElapsedTime = Math.ceil((Date.now() - thinkingStartTime) / 1000);
-                  // Update the state one last time with the final duration
-                  setPreviewState(prev => ({ ...prev, elapsedTime: finalElapsedTime }));
+                  if (currentTargetIsCard) {
+                    updateMessage(continuationTargetForTimer.cardId, continuationTargetForTimer.messageId, { _previewDuration: finalElapsedTime });
+                  } else {
+                    setPreviewState(prev => prev.streamId === streamId ? { ...prev, elapsedTime: finalElapsedTime } : prev);
+                  }
                 }
               }
             }
@@ -1238,7 +1251,6 @@ export const CardStack: React.FC<{
                 newToolCallsPayload = JSON.parse(JSON.stringify(toolCalls));
                 updateNeeded = true;
             }
-            // --- END OF MODIFICATION ---
 
             if (delta.tool_calls) {
                 for (const chunk of delta.tool_calls) {
@@ -1260,122 +1272,112 @@ export const CardStack: React.FC<{
             }
 
             if (updateNeeded) {
-              if (isHandedOff && handedOffTarget) {
-                  const updatePayload: Partial<CardMessage> & { _thinkingCompleted?: boolean } = {};
-                  if (newContentPayload !== undefined) updatePayload.content = newContentPayload;
-                  if (newToolCallsPayload !== undefined) updatePayload.tool_calls = newToolCallsPayload;
-                  if (thinkingCompleted) updatePayload._thinkingCompleted = true;
-                  updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, updatePayload);
-              }
-              else if (streamTargetRef.current?.type === 'preview') {
-                  setPreviewState(prev => ({
-                      ...prev,
-                      ...(newContentPayload !== undefined && { content: newContentPayload }),
-                      ...(newToolCallsPayload !== undefined && { toolCalls: newToolCallsPayload }),
-                      ...(thinkingCompleted && { thinkingCompleted: true }),
-                  }));
-              }
-              else if (streamTargetRef.current?.type === 'card') {
-                  isHandedOff = true;
-                  handedOffTarget = { cardId: streamTargetRef.current.cardId!, messageId: streamTargetRef.current.messageId! };
-                  const updatePayload: Partial<CardMessage> & { _thinkingCompleted?: boolean } = {};
-                  if (newContentPayload !== undefined) updatePayload.content = newContentPayload;
-                  if (newToolCallsPayload !== undefined) updatePayload.tool_calls = newToolCallsPayload;
-                  if (thinkingCompleted) updatePayload._thinkingCompleted = true;
-                  updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, updatePayload);
+              const continuationTarget = streamContinuationMapRef.current.get(streamId);
+
+              if (continuationTarget) {
+                const updatePayload: Partial<CardMessage> & { _thinkingCompleted?: boolean } = {};
+                if (newContentPayload !== undefined) updatePayload.content = newContentPayload;
+                if (newToolCallsPayload !== undefined) updatePayload.tool_calls = newToolCallsPayload;
+                if (thinkingCompleted) updatePayload._thinkingCompleted = true;
+                updateMessage(continuationTarget.cardId, continuationTarget.messageId, updatePayload);
+              } else {
+                setPreviewState(prev => {
+                  if (prev.streamId !== streamId) return prev;
+                  return {
+                    ...prev,
+                    ...(newContentPayload !== undefined && { content: newContentPayload }),
+                    ...(newToolCallsPayload !== undefined && { toolCalls: newToolCallsPayload }),
+                    ...(thinkingCompleted && { thinkingCompleted: true }),
+                  }
+                });
               }
             }
           } catch (e) {
             console.warn('Stream parsing error:', e);
           }
         }
-        }
+      }
     } catch (error) {
         if (error instanceof Error && error.name === 'AbortError') {
-            console.log('Preview fetch was aborted.');
+            console.log(`Stream ${streamId} was aborted.`);
         } else {
-            console.error("Preview fetch error:", error);
-            if (!controller.signal.aborted && !isHandedOff) {
-                setPreviewState((prev) => ({ ...prev, content: "Failed to fetch explanation."}));
-            }
+            console.error(`Preview fetch error for stream ${streamId}:`, error);
+            setPreviewState((prev) => (prev.streamId === streamId ? { ...prev, content: "Failed to fetch explanation."} : prev));
         }
     } finally {
-        if (isHandedOff && handedOffTarget) {
-          removeActiveStream(handedOffTarget.messageId);
+        // --- START OF MODIFICATION: Clean up the controller from the map ---
+        streamControllersRef.current.delete(streamId);
+        // --- END OF MODIFICATION ---
+
+        const continuationTarget = streamContinuationMapRef.current.get(streamId);
+        if (continuationTarget) {
+          removeActiveStream(continuationTarget.messageId);
         } else {
           removeActiveStream(streamId);
         }
 
-        if (isHandedOff && handedOffTarget && thinkingStartTime !== null) {
+        if (thinkingStartTime !== null && !thinkingCompleted) {
+            if (previewTimerRef.current) {
+                clearInterval(previewTimerRef.current);
+                previewTimerRef.current = null;
+            }
             const finalElapsedTime = Math.ceil((Date.now() - thinkingStartTime) / 1000);
-            updateMessage(handedOffTarget.cardId, handedOffTarget.messageId, {
-                _thinkingDuration: finalElapsedTime,
-                _thinkingCompleted: true, // Ensure completion is marked on handoff
-            });
-        }
-
-        if (!isHandedOff) {
-            // If thinking started but was not completed (e.g., only reasoning content was received)
-            if (thinkingStartTime !== null && !thinkingCompleted) {
-                if (previewTimerRef.current) {
-                    clearInterval(previewTimerRef.current);
-                    previewTimerRef.current = null;
-                }
-                const finalElapsedTime = Math.ceil((Date.now() - thinkingStartTime) / 1000);
-                setPreviewState(prev => ({ 
+            if (continuationTarget) {
+                updateMessage(continuationTarget.cardId, continuationTarget.messageId, {
+                    _previewDuration: finalElapsedTime,
+                    _thinkingCompleted: true,
+                });
+            } else {
+                setPreviewState(prev => prev.streamId === streamId ? { 
                     ...prev, 
                     isLoading: false, 
                     thinkingCompleted: true, 
                     elapsedTime: finalElapsedTime 
-                }));
-            } else {
-                setPreviewState(prev => ({ ...prev, isLoading: false }));
+                } : prev);
             }
-        }
-
-        if (previewTimerRef.current) {
+        } else if (previewTimerRef.current) {
             clearInterval(previewTimerRef.current);
             previewTimerRef.current = null;
         }
+        
+        setPreviewState(prev => prev.streamId === streamId ? { ...prev, isLoading: false } : prev);
+        streamContinuationMapRef.current.delete(streamId);
     }
   };
 
   const fetchLLMStreamForNewCard = useCallback(async (
     cardId: string,
     history: CardMessage[],
-    targetMessageInfo?: { aiMessageIdToContinue: string } | { userMessageId: string },
+    targetMessageInfo: { userMessageId: string },
     backgroundTopic?: string
   ) => {
-    if (streamAbortControllerRef.current) {
-        streamAbortControllerRef.current.abort();
+    // --- START OF MODIFICATION: Abort only the active PREVIEW stream, not all streams. ---
+    const previewStreamId = previewState.streamId;
+    if (previewStreamId) {
+        const controllerToAbort = streamControllersRef.current.get(previewStreamId);
+        controllerToAbort?.abort();
     }
+    // --- END OF MODIFICATION ---
+
+    const aiMsgId = `${targetMessageInfo.userMessageId}_ai`;
+    appendMessage(cardId, { id: aiMsgId, role: 'ai', content: '', timestamp: Date.now() });
+    addActiveStream(aiMsgId);
+
+    // --- START OF MODIFICATION: Create and manage a dedicated AbortController for this new card's stream ---
     const controller = new AbortController();
-    streamAbortControllerRef.current = controller;
-
-    let aiMsgId: string;
-    let initialContent = '';
-    let startTime: number | null = null;
-
-    if (targetMessageInfo && 'aiMessageIdToContinue' in targetMessageInfo) {
-        aiMsgId = targetMessageInfo.aiMessageIdToContinue;
-        const existingMsg = history.find(m => m.id === aiMsgId);
-        if (existingMsg) {
-            initialContent = existingMsg.content;
-        }
-    } else {
-        const userMsgId = targetMessageInfo?.userMessageId;
-        aiMsgId = userMsgId ? `${userMsgId}_ai` : `msg_${Date.now()}_ai`;
-        appendMessage(cardId, { id: aiMsgId, role: 'ai', content: '', timestamp: Date.now() });
-    }
-
-    streamTargetRef.current = { type: 'card', cardId, messageId: aiMsgId };
-
+    streamControllersRef.current.set(aiMsgId, controller);
+    // --- END OF MODIFICATION ---
+    
     if (!apiUrl || !apiKey || !activeModel) {
         updateMessage(cardId, aiMsgId, { content: "API settings are missing." });
+        removeActiveStream(aiMsgId);
+        streamControllersRef.current.delete(aiMsgId); // Cleanup
         return;
     }
 
-    try {
+    let startTime: number | null = null;
+
+     try {
         const apiMessages = history.map(msg => ({
             role: msg.role === 'ai' ? 'assistant' : 'user',
             content: msg.content
@@ -1409,8 +1411,7 @@ export const CardStack: React.FC<{
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
         let buffer = '';
-        let aiContent = initialContent;
-        let isFirstChunk = true; // Consolidated first chunk flag
+        let aiContent = '';
         let allToolCalls: any[] = [];
         let thinkingCompleted = false;
 
@@ -1429,52 +1430,37 @@ export const CardStack: React.FC<{
                 try {
                     const json = JSON.parse(data);
                     const delta = json.choices?.[0]?.delta || json.delta || json;
-
                     if (!delta) continue;
-
-                    let reasoningCall: any;
 
                     let updateNeeded = false;
                     let newContentPayload: string | undefined;
                     let newToolCallsPayload: any[] | undefined;
 
-                    // Consolidated timing start on first reasoning OR content
-                    if (delta.reasoning_content || delta.content) {
-                        // Start timing on first meaningful chunk (reasoning or content)
-                        if (isFirstChunk) {
-                            startTime = Date.now();
-                            isFirstChunk = false;
-                        }
+                    if ((delta.reasoning_content || delta.content) && startTime === null) {
+                        startTime = Date.now();
                     }
 
-                    // Handle reasoning content
                     if (delta.reasoning_content) {
-                        const reasoningChunk = delta.reasoning_content;
+                        let reasoningCall = allToolCalls.find(call => call.id === 'deepseek_reasoning');
                         if (!reasoningCall) {
                             reasoningCall = { id: 'deepseek_reasoning', type: 'function', function: { name: 'Reasoning', arguments: '' } };
                             allToolCalls.push(reasoningCall);
                         }
-                        reasoningCall.function.arguments += reasoningChunk;
+                        reasoningCall.function.arguments += delta.reasoning_content;
                         newToolCallsPayload = JSON.parse(JSON.stringify(allToolCalls));
                         updateNeeded = true;
                     }
 
-                    // Handle regular content
                     if (delta.content) {
                         aiContent += delta.content;
                         newContentPayload = normalizeMathDelimiters(aiContent);
                         updateNeeded = true;
-                        if (!thinkingCompleted) {
-                            thinkingCompleted = true;
-                        }
+                        if (!thinkingCompleted) thinkingCompleted = true;
                     }
 
-                    // Handle tool calls
                     if (delta.tool_calls) {
                         for (const chunk of delta.tool_calls) {
-                            while (allToolCalls.length <= chunk.index) {
-                                allToolCalls.push({});
-                            }
+                            while (allToolCalls.length <= chunk.index) allToolCalls.push({});
                             const current = allToolCalls[chunk.index];
                             if (chunk.id) current.id = chunk.id;
                             if (chunk.type) current.type = chunk.type;
@@ -1509,27 +1495,36 @@ export const CardStack: React.FC<{
       } else {
           console.error("LLM fetch error:", error);
           if (!controller.signal.aborted) {
-            updateMessage(cardId, aiMsgId, { content: initialContent + "\n\nFailed to fetch AI response." });
+            updateMessage(cardId, aiMsgId, { content: "\n\nFailed to fetch AI response." });
           }
       }
     } finally {
-        if (streamAbortControllerRef.current === controller) {
-            streamAbortControllerRef.current = null;
-            streamTargetRef.current = null;
-        }
+        // --- START OF MODIFICATION: Clean up this stream's specific controller ---
+        streamControllersRef.current.delete(aiMsgId);
+        // --- END OF MODIFICATION ---
+        removeActiveStream(aiMsgId);
 
-        // --- START OF MODIFICATION: Save final thinking duration ---
         if (!controller.signal.aborted && startTime !== null) {
             const finalElapsedTime = Math.ceil((Date.now() - startTime) / 1000);
             updateMessage(cardId, aiMsgId, {
                 _thinkingDuration: finalElapsedTime,
             });
         }
-        // --- END OF MODIFICATION ---
     }
-  }, [apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, appendMessage, updateMessage]);
+  }, [apiUrl, apiKey, activeModel, globalSystemPrompt, dialogueSystemPrompt, appendMessage, updateMessage, removeActiveStream, previewState.streamId]);
 
   const handleTermClick = useCallback((term: string, rect: DOMRect) => {
+    // --- START OF MODIFICATION: Abort only the previous *preview* stream, not any other active streams. ---
+    // This prevents aborting a stream that has been handed off to a new card.
+    const previousPreviewStreamId = previewState.streamId;
+    if (previousPreviewStreamId) {
+      const controllerToAbort = streamControllersRef.current.get(previousPreviewStreamId);
+      if (controllerToAbort) {
+        controllerToAbort.abort();
+      }
+    }
+    // --- END OF MODIFICATION ---
+    
     const previewCardWidth = currentCardRef.current ? currentCardRef.current.offsetWidth / 2 : 300;
     const screenWidth = window.innerWidth;
     const horizontalOffset = 10;
@@ -1562,9 +1557,16 @@ export const CardStack: React.FC<{
         streamId: newStreamId,
       };
     });
-  }, [currentCardRef]);
+  }, [currentCardRef, previewState.streamId]); // Dependency added
   
   const handleClosePreview = () => {
+    // --- START OF MODIFICATION: Abort the specific stream associated with the preview being closed. ---
+    const streamIdToClose = previewState.streamId;
+    if (streamIdToClose) {
+        const controller = streamControllersRef.current.get(streamIdToClose);
+        controller?.abort();
+    }
+    // --- END OF MODIFICATION ---
     setPreviewState(p => ({...p, visible: false, sourceTerm: '', elapsedTime: 0, streamId: null}));
   };
   
@@ -1574,44 +1576,43 @@ export const CardStack: React.FC<{
   };
 
   const handleCreateFromPreview = () => {
-    if (!previewState.sourceTerm) return;
-
-    lettingStreamContinueRef.current = true;
+    if (!previewState.sourceTerm || !previewState.streamId) return;
     
+    const originalStreamId = previewState.streamId;
     navigationAction.current = 'create';
     const userMsg: CardMessage = { id: `msg_${Date.now()}_user`, role: 'user', content: previewState.sourceTerm, timestamp: Date.now() };
     
-    const aiMsg: CardMessage & { _initialElapsedTime?: number; _thinkingCompleted?: boolean } = { 
-        id: `msg_${Date.now()}_ai`, 
-        role: 'ai', 
-        content: previewState.content, 
-        tool_calls: previewState.toolCalls,
-        timestamp: Date.now(),
-        _initialElapsedTime: previewState.elapsedTime,
-        _thinkingCompleted: !previewState.isLoading,
+    const aiMsg: CardMessage & { _initialElapsedTime?: number; _thinkingCompleted?: boolean; _previewDuration?: number } = { 
+      id: `msg_${Date.now()}_ai`, 
+      role: 'ai', 
+      content: previewState.content, 
+      tool_calls: previewState.toolCalls,
+      timestamp: Date.now(),
+      _initialElapsedTime: previewState.elapsedTime,
+      _previewDuration: previewState.elapsedTime,
+      _thinkingCompleted: !previewState.isLoading,
     };
     
-    if (previewState.streamId && previewState.isLoading) {
-      removeActiveStream(previewState.streamId);
-      addActiveStream(aiMsg.id);
-    }
-
     addCard([userMsg, aiMsg], currentCardId || undefined);
     
-    setPreviewState(p => ({...p, visible: false, sourceTerm: '', elapsedTime: 0, streamId: null}));
-
     const { projects, activeProjectId } = useProjectStore.getState();
     const activeProject = projects.find(p => p.id === activeProjectId);
     const newCardId = activeProject?.currentCardId;
 
     if (newCardId) {
-      streamTargetRef.current = { type: 'card', cardId: newCardId, messageId: aiMsg.id };
-    } else {
-      if (streamAbortControllerRef.current) {
-        streamAbortControllerRef.current.abort();
-        streamAbortControllerRef.current = null;
+      streamContinuationMapRef.current.set(originalStreamId, { cardId: newCardId, messageId: aiMsg.id });
+
+      if (previewState.isLoading) {
+        removeActiveStream(originalStreamId);
+        addActiveStream(aiMsg.id);
       }
+    } else {
+      // --- START OF MODIFICATION: Abort the specific stream if card creation fails. ---
+      const controller = streamControllersRef.current.get(originalStreamId);
+      controller?.abort();
+      // --- END OF MODIFICATION ---
     }
+    setPreviewState(p => ({...p, visible: false, sourceTerm: '', elapsedTime: 0, streamId: null}));
   };
   
   const handleCreateFromSelection = () => {
@@ -1644,13 +1645,30 @@ export const CardStack: React.FC<{
   const handleDelete = (id: string) => {
     navigationAction.current = 'delete';
 
-    if (streamTargetRef.current?.type === 'card' && streamTargetRef.current.cardId === id) {
-      if (streamAbortControllerRef.current) {
-        streamAbortControllerRef.current.abort();
-        streamAbortControllerRef.current = null;
-      }
-      streamTargetRef.current = null;
+    // --- START OF MODIFICATION: Abort any stream writing to a deleted card. ---
+    let streamIdToDelete: string | null = null;
+    for (const [streamId, target] of streamContinuationMapRef.current.entries()) {
+        if (target.cardId === id) {
+            streamIdToDelete = streamId;
+            break;
+        }
     }
+    if (streamIdToDelete) {
+        const controller = streamControllersRef.current.get(streamIdToDelete);
+        controller?.abort();
+    }
+
+    // Also check for streams that started on a card (from selection)
+    const cardToDelete = cards.find(c => c.id === id);
+    if (cardToDelete) {
+        cardToDelete.messages.forEach(msg => {
+            if (msg.role === 'ai') {
+                const controller = streamControllersRef.current.get(msg.id);
+                controller?.abort();
+            }
+        });
+    }
+    // --- END OF MODIFICATION ---
     
     deleteCardAndDescendants(id);
   };
@@ -1693,19 +1711,23 @@ export const CardStack: React.FC<{
       return;
     }
 
-    streamTargetRef.current = { type: 'preview' };
-    fetchAIForPreview(previewState.sourceTerm, previewState.streamId);
-
+    // --- START OF MODIFICATION: Create controller here and pass it to the fetch function ---
+    const streamId = previewState.streamId;
+    const controller = new AbortController();
+    streamControllersRef.current.set(streamId, controller);
+    
+    fetchAIForPreview(previewState.sourceTerm, streamId, controller);
+    // --- END OF MODIFICATION ---
+    
     return () => {
-      if (lettingStreamContinueRef.current) {
-        lettingStreamContinueRef.current = false;
-        return;
+      // --- START OF MODIFICATION: More robust cleanup logic ---
+      // This cleanup runs when the component unmounts or dependencies change.
+      // We only abort if the stream hasn't been handed off for continuation.
+      if (!streamContinuationMapRef.current.has(streamId)) {
+        const controllerToAbort = streamControllersRef.current.get(streamId);
+        controllerToAbort?.abort();
       }
-      
-      if (streamAbortControllerRef.current) {
-        streamAbortControllerRef.current.abort();
-        streamAbortControllerRef.current = null;
-      }
+      // --- END OF MODIFICATION ---
     };
   }, [previewState.visible, previewState.sourceTerm, previewState.streamId]);
 
@@ -1750,13 +1772,8 @@ export const CardStack: React.FC<{
               </div>
             ) : (
               cardsToRender.map(ac => {
-                  // --- START OF MODIFICATION: Always use fresh card data ---
-                  // Find the most up-to-date card data from the store using the ID.
-                  // The `ac.card` in the animated object can be stale during animations.
                   const latestCardData = cards.find(c => c.id === ac.id);
-                  // Fallback to the animated card's data if it's somehow been deleted mid-animation.
                   const cardToRender = latestCardData || ac.card;
-                  // --- END OF MODIFICATION ---
                   
                   const isAnimating = animatedCards.length > 0;
                   const isTopCard = !isAnimating && ac.id === currentCardId;
@@ -1784,7 +1801,7 @@ export const CardStack: React.FC<{
                       <div style={{ pointerEvents: 'auto', width: '100%', height: '100%' }}>
                         {showCurrentDialog ? (
                           <CurrentCardDialog
-                            card={cardToRender} // Use the fresh data
+                            card={cardToRender}
                             cardRef={isTopCard ? currentCardRef : undefined}
                             onDelete={() => handleDelete(ac.id)}
                             onCreateNew={() => handleCreateCard([], ac.id)}
@@ -1796,7 +1813,7 @@ export const CardStack: React.FC<{
                           />
                         ) : (
                           <ParentCard 
-                            card={cardToRender} // Use the fresh data
+                            card={cardToRender}
                             onClick={() => !isAnimating && setCurrentCard(ac.id)}
                             onHoverStart={() => setHoveredCardId(ac.id)}
                             onHoverEnd={() => setHoveredCardId(null)}
