@@ -10,7 +10,7 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import 'katex/dist/katex.min.css';
 import { visit } from 'unist-util-visit';
-import { Node, Parent, Literal } from 'unist';
+import type { Node, Parent, Literal } from 'unist';
 import rehypeSanitize, {defaultSchema} from 'rehype-sanitize';
 import rehypeRaw from 'rehype-raw';
 
@@ -455,23 +455,56 @@ const CurrentCardDialog: React.FC<{
   const handleTextSelection = useCallback(() => {
     const selection = window.getSelection();
     if (selection && selection.rangeCount > 0 && selection.toString().trim()) {
-      onTextSelection(selection.toString().trim()); 
       const range = selection.getRangeAt(0);
-      const rect = range.getBoundingClientRect();
-      const containerRect = cardRef?.current?.getBoundingClientRect();
-      if (containerRect) {
-        setSelectionButton({ visible: true, top: rect.top - containerRect.top, left: rect.right - containerRect.left });
+      
+      // --- START OF MODIFICATION: Check if selection is within an AI message ---
+      let startNode = range.startContainer;
+      let endNode = range.endContainer;
+
+      // Traverse up the DOM tree to find the closest '.ai-message-content' ancestor
+      const isWithinAIMessage = (node: globalThis.Node | null): boolean => {
+        let currentNode = node;
+        while (currentNode) {
+          if (currentNode.nodeType === Node.ELEMENT_NODE && (currentNode as Element).classList.contains('ai-message-content')) {
+            return true;
+          }
+          currentNode = currentNode.parentNode;
+        }
+        return false;
+      };
+      
+      if (isWithinAIMessage(startNode) && isWithinAIMessage(endNode)) {
+        onTextSelection(selection.toString().trim());
+        const rect = range.getBoundingClientRect();
+        const containerRect = cardRef?.current?.getBoundingClientRect();
+        if (containerRect) {
+          setSelectionButton({ visible: true, top: rect.top - containerRect.top, left: rect.right - containerRect.left });
+        }
+      } else {
+        // If selection is not within an AI message, hide the button
+        setSelectionButton({ visible: false, top: 0, left: 0 });
       }
+      // --- END OF MODIFICATION ---
     } else {
       setSelectionButton({ visible: false, top: 0, left: 0 });
     }
   }, [onTextSelection, cardRef]);
 
   useEffect(() => {
-    const handleMouseUp = () => setTimeout(handleTextSelection, 0);
+    // --- START OF MODIFICATION: Add touch event for mobile ---
+    const handleSelectionEnd = () => setTimeout(handleTextSelection, 0);
     const container = cardRef?.current;
-    if (container) { container.addEventListener('mouseup', handleMouseUp); }
-    return () => { if (container) { container.removeEventListener('mouseup', handleMouseUp); } };
+    if (container) { 
+      container.addEventListener('mouseup', handleSelectionEnd); 
+      container.addEventListener('touchend', handleSelectionEnd); // Add touch event
+    }
+    return () => { 
+      if (container) { 
+        container.removeEventListener('mouseup', handleSelectionEnd); 
+        container.removeEventListener('touchend', handleSelectionEnd); // Remove touch event
+      } 
+    };
+    // --- END OF MODIFICATION ---
   }, [cardRef, handleTextSelection]);
 
   const handleCreateFromSelectionClick = () => {
@@ -574,7 +607,11 @@ const CurrentCardDialog: React.FC<{
                     {toolCalls.length > 0 && (
                       <ToolCallDisplay toolCalls={toolCalls} isStreaming={isStreaming} initialElapsedTime={initialTime} rehypePlugins={rehypePlugins} />
                     )}
-                    <MarkdownRenderer content={msg.content} onTermClick={onTermClick} rehypePlugins={rehypePlugins} />
+                    {/* --- START OF MODIFICATION: Add wrapper div for AI content --- */}
+                    <div className="ai-message-content">
+                      <MarkdownRenderer content={msg.content} onTermClick={onTermClick} rehypePlugins={rehypePlugins} />
+                    </div>
+                    {/* --- END OF MODIFICATION --- */}
                   </div>
                 );
               }

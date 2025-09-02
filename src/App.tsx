@@ -29,7 +29,7 @@ const useInputAreaHeight = () => {
 const RIGHT_PANEL_WIDTH_DESKTOP = 300;
 const MOBILE_BREAKPOINT = 600;
 const MOBILE_PANEL_WIDTH = 300; 
-
+const MOBILE_TOP_NAV_HEIGHT = 120;
 // ... (ErrorBoundary code is correct and remains unchanged) ...
 interface ErrorBoundaryState {
   hasError: boolean
@@ -218,7 +218,7 @@ function App() {
   const COLLAPSED_WIDTH = 56;
   const expandedWidth = windowWidth < 1080 ? 200 : 300;
   const leftPanelWidth = isLeftPanelCollapsed ? COLLAPSED_WIDTH : expandedWidth;
-  const topNavHeightMobile = isMobile ? inputAreaHeight : 0;
+  const topNavHeightMobile = isMobile ? MOBILE_TOP_NAV_HEIGHT : 0;
   const centerAreaWidth = isMobile ? windowWidth : windowWidth - leftPanelWidth - RIGHT_PANEL_WIDTH_DESKTOP;
   const availableHeight = windowHeight - topNavHeightMobile - inputAreaHeight;
   const cardStackContainerTop = topNavHeightMobile;
