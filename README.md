@@ -64,18 +64,11 @@ Explore introduces a groundbreaking non-linear, tree-based conversation structur
    npm install
    ```
 
-3. **Configure API Access**
-   - Click the settings gear icon (⚙️) in the bottom-left corner
-   - Enter your API endpoint (e.g., `https://api.deepseek.com/v1/chat/completions`)
-   - Enter your API key
-   - Add your preferred models
-   - Save settings
-
-4. **Start the Application**
+3. **Start the Application**
    ```bash
    npm run dev
    ```
-   Open [http://localhost:5173](http://localhost:5173) to begin exploring!
+4. **Begin exploring!**
 
 ## 📖 Usage Guide
 
