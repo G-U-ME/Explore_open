@@ -1,9 +1,5 @@
 # Explore - AI Hierarchical Conversation Tool
 
-<div align="center">
-  <img src="https://via.placeholder.com/800x400.png?text=Explore+Project+UI+Screenshot" alt="Explore App Screenshot" width="800">
-</div>
-
 ## 🌟 Overview
 
 Explore is a dynamic, card-based knowledge exploration tool that revolutionizes AI conversations. By transforming ideas and thoughts into an interactive, hierarchical stack of cards, Explore breaks free from the linear constraints of traditional chat interfaces, enabling truly creative and structured knowledge exploration.
