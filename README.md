@@ -1,183 +1,215 @@
-# Explore
+# Explore - AI Hierarchical Conversation Tool
 
-A dynamic, card-based knowledge exploration tool that reimagines note-taking as an interactive, hierarchical conversation with AI.
+<div align="center">
+  <img src="https://via.placeholder.com/800x400.png?text=Explore+Project+UI+Screenshot" alt="Explore App Screenshot" width="800">
+</div>
 
-![placeholder](https://via.placeholder.com/800x400.png?text=Explore+Project+UI+Screenshot)
-*(A screenshot or GIF of the application in action would be ideal here.)*
+## 🌟 Overview
 
-## About The Project
+Explore is a dynamic, card-based knowledge exploration tool that revolutionizes AI conversations. By transforming ideas and thoughts into an interactive, hierarchical stack of cards, Explore breaks free from the linear constraints of traditional chat interfaces, enabling truly creative and structured knowledge exploration.
 
-Explore Project is a visual and interactive platform designed for dynamic knowledge exploration. It moves beyond traditional linear notes by representing ideas and conversations as a navigable, three-dimensional stack of cards. Each card is a self-contained chat session, which can branch off from any point in a previous conversation, creating a rich, hierarchical tree of thought.
+### The Problem with Traditional AI Chat
 
-This application is built for researchers, writers, developers, and anyone who thrives on non-linear thinking and wants to leverage AI to expand upon their ideas in a structured yet flexible way.
+Traditional AI dialogs are confined to linear, command-line style interfaces reminiscent of teleprinter technology. Users face significant challenges when dealing with:
 
-## Key Features
+- **Complex AI responses** containing unfamiliar terms that require individual lookups
+- **Multiple solution paths** that need to be explored in parallel
+- **Non-linear thought processes** that demand flexible exploration
+- **Memory limitations** when trying to build upon previous discussions
 
--   **Visual Card Stack Interface**: The current line of thought is represented as a stack of cards, providing a clear visual path of your exploration journey.
--   **Hierarchical Note-Taking**: Create new cards from existing ones, building a tree of interconnected ideas. A new card can be spawned from any selected text, allowing you to dive deeper into specific concepts.
--   **AI-Powered Conversations**: Each card is an interactive chat with a configurable AI model.
--   **Automatic Title Generation**: The AI automatically summarizes the content of a card to generate a concise title, keeping your workspace organized.
--   **2D Tree Navigation**: Get a bird's-eye view of your entire knowledge tree and quickly jump to any card in your project.
--   **Project-Based Organization**: Group your explorations into distinct projects, each with its own independent card tree.
--   **Drag-and-Drop Project Management**: Easily reorder your projects to fit your workflow.
--   **Multimedia & Context Support**: Attach files (images, documents) and use selected text from a parent card as context for new queries.
--   **Configurable Backend**: Easily configure the API endpoint, key, and available LLM models to connect with your preferred AI service.
--   **Web Search Integration**: Empower the AI with real-time web search capabilities for up-to-date information.
+### The Hierarchical Solution
 
-## Tech Stack
+Explore introduces a groundbreaking non-linear, tree-based conversation structure that mirrors how humans naturally think and explore:
 
--   **Frontend**: [React](https://reactjs.org/) & [TypeScript](https://www.typescriptlang.org/)
--   **State Management**: [Zustand](https://github.com/pmndrs/zustand)
--   **Styling**: [Tailwind CSS](https://tailwindcss.com/)
--   **Drag & Drop**: [dnd-kit](https://dndkit.com/)
--   **Icons**: [Lucide React](https://lucide.dev/)
+- **Card-based Exploration**: Each conversation branch becomes an individual card
+- **Visual Space Navigation**: See your entire knowledge tree at a glance
+- **Contextual Continuity**: Each card maintains full conversation history
+- **Flexible Organization**: Group explorations into distinct projects
 
-## Core Concepts
+## ✨ Key Features
 
-### 1. The Card Stack (Center View)
+### 🎯 Core Functionality
+- **Hierarchical Card Stack**: Navigate through conversations as a 3D stack of cards with parent-child relationships
+- **Real-time AI Streaming**: Watch responses build in real-time with thinking time indicators
+- **Term-Extraction System**: @@marked terms@@ become clickable explanations
+- **Preview Cards**: Instant pop-up explanations without disrupting flow
+- **Project Organization**: Manage multiple distinct exploration threads
 
-The heart of the application. It displays the `currentCard` in full view, ready for interaction. Its parent cards are stacked behind it, receding into the background along a gentle curve. This provides immediate context for your current position in the knowledge tree.
+### 🔧 Technical Features
+- **Guest-Free Usage**: No login required, works offline
+- **Model Flexibility**: Supports any OpenAI-compatible API endpoint
+- **Rich Media Support**: Text, images, and document attachments
+- **Web Search Integration**: Enable real-time information retrieval
+- **Customizable Prompts**: System prompts for different interaction styles
 
--   **Interaction**: You can click on any visible parent card to make it the `currentCard`.
--   **Creation**: Create a blank child card or select text within the current card to create a new card with that text as its initial context.
+### 🎨 User Experience
+- **Responsive Design**: Optimized for desktop and mobile devices
+- **Touch Gestures**: Native mobile interaction support
+- **Animation System**: Smooth transitions between conversation states
+- **Visual Feedback**: Live thinking indicators and progress tracking
 
-### 2. The Tree Navigation (Right Panel)
-
-This panel provides a complete 2D map of your project's card structure.
-
--   **Representation**: Each card is a circle, and lines connect parents to children.
--   **Navigation**: The view automatically centers on the `currentCard`. You can scroll through the entire tree and click any node to instantly switch to that card.
--   **Clarity**: The `currentCard` is highlighted, and hovering over any node reveals its title.
-
-### 3. Conversational Exploration (Input Area)
-
-The input area is where you interact with the AI on the `currentCard`.
-
--   **Rich Input**: Beyond simple text, you can attach files and images.
--   **Context-Aware**: When you create a card from selected text, that text is automatically included as context for your first message.
--   **Model Selection**: Choose the AI model you want to use for the conversation on the fly.
-
-## Getting Started
-
-To get a local copy up and running, follow these simple steps.
+## 🚀 Quick Start
 
 ### Prerequisites
-
--   Node.js (v16 or later)
--   npm, yarn, or pnpm
+- **Node.js** (v16 or later)
+- **npm**, **yarn**, or **pnpm**
+- **AI API Access** (OpenAI-compatible endpoint recommended)
 
 ### Installation
 
-1.  **Clone the repo**
-    ```sh
-    git clone https://github.com/your-username/explore-project.git
-    cd explore-project
-    ```
+1. **Clone the Repository**
+   ```bash
+   git clone https://github.com/G-U-ME/Explore_open.git
+   cd Explore_open
+   ```
 
-2.  **Install NPM packages**
-    ```sh
-    npm install
-    # or
-    yarn install
-    ```
+2. **Install Dependencies**
+   ```bash
+   npm install
+   ```
 
-3.  **Set up environment variables**
-    The application connects to a backend AI service. You must configure the API endpoint and your key. Create a `.env.local` file in the root of the project and add your configuration.
+3. **Configure API Access**
+   - Click the settings gear icon (⚙️) in the bottom-left corner
+   - Enter your API endpoint (e.g., `https://api.deepseek.com/v1/chat/completions`)
+   - Enter your API key
+   - Add your preferred models
+   - Save settings
 
-    The application looks for an OpenAI-compatible API endpoint.
+4. **Start the Application**
+   ```bash
+   npm run dev
+   ```
+   Open [http://localhost:5173](http://localhost:5173) to begin exploring!
 
-    `.env.local.example`
-    ```
-    # No environment variables are strictly required by the code provided,
-    # as settings are managed in the UI. However, if you wanted to set
-    # default values, you could do so here and load them in the store.
-    ```
+## 📖 Usage Guide
 
-4.  **Run the development server**
-    ```sh
-    npm run dev
-    # or
-    yarn dev
-    ```
-    Open [http://localhost:5173](http://localhost:5173) (or your configured port) to view it in the browser.
+### 🔄 Basic Conversation Flow
 
-## Configuration
+1. **Create Project**: Use the left panel to create a new project workspace
+2. **Start Dialog**: Send your first message to AI
+3. **Explore Depth**: Click terms marked @@like this@@ to see instant explanations
+4. **Branch Topics**: Select text and create new cards for deeper exploration
+5. **Navigate Tree**: Use the right panel to visualize and jump between conversation branches
 
-For the AI features to work, you must configure your API settings within the application itself:
+### 🎯 Advanced Features
 
-1.  Click the **Settings** (gear) icon in the bottom-left corner.
-2.  In the modal that appears:
-    -   **API URL**: Enter the full URL of your LLM provider's chat completions endpoint (e.g., `https://api.openai.com/v1/chat/completions`).
-    -   **API Key**: Enter your secret API key.
-    -   **Model Names**: Add the specific model names you want to use (e.g., `gpt-4-turbo`, `claude-3-opus-20240229`). You can add multiple models to choose from in the input area.
-3.  Click the **Save** (check) button. The settings are persisted locally in your browser.
+#### Term Exploration
+- AI automatically marks unfamiliar terms with @@special formatting@@
+- Click any marked term for an instant preview explanation
+- Drag preview explanations into new conversation cards
 
-## Project Structure
+#### Card Management
+- **Create New Card**: Click the "+" button on any card
+- **From Selection**: Highlight text and create focused sub-conversations
+- **Navigate Stack**: Click parent cards in the background to switch context
 
-The codebase is organized with a focus on feature components and centralized state management using Zustand.
+#### Project Organization
+- Multiple project support for different topics
+- Drag to reorder projects
+- Independent conversation trees per project
 
+## 🛠️ Technical Architecture
+
+### Frontend Stack
+```
+- React 18 + TypeScript - Modern web framework
+- Vite - Fast build tool and dev server
+- Zustand - Lightweight state management
+- Tailwind CSS - Utility-first styling
+- Three.js + React Three Fiber - 3D card animations
+- DND-kit - Drag & drop functionality
+- React Markdown + KaTeX - Rich text rendering
+```
+
+### Key Components
+
+#### CardStack.tsx - Main Conversational Interface
+- 3D card visualization with physics-based positioning
+- Touch gesture support for mobile devices
+- Real-time content streaming and updates
+- Animation system for smooth state transitions
+
+#### Stores (State Management)
+- **projectStore.ts**: Project and card hierarchy management
+- **cardStore.ts**: Individual card conversations and AI interactions
+- **settingsStore.ts**: User preferences and API configuration
+
+#### InputArea.tsx - Message Input System
+- Rich text input with file attachment support
+- Model selection and web search toggles
+- Streaming response handling with typing indicators
+
+#### TreeNavigation.tsx - Visual Tree Explorer
+- Hierarchical conversation tree visualization
+- Quick navigation between any conversation branch
+- Progress tracking and overview
+
+## 🔌 API Configuration
+
+### Supported Endpoints
+Explore works with any OpenAI-compatible API endpoint:
+
+```javascript
+// Example configuration
+{
+  "apiUrl": "https://api.deepseek.com/v1/chat/completions",
+  "apiKey": "sk-your-api-key-here",
+  "models": ["deepseek-reasoner", "deepseek-chat"],
+  "activeModel": "deepseek-reasoner"
+}
+```
+
+### Default Models
+- **DeepSeek-V3-0324**: Advanced reasoning with thinking traces
+- **Custom Models**: Add any OpenAI-compatible model
+
+### Advanced Settings
+
+#### Web Search
+- Enable/disable real-time information retrieval
+- Configurable search providers
+- Background context integration
+
+## 📊 Data Model
+
+### Conversation Flow
+1. **Root Card**: Initial conversation entry
+2. **Child Cards**: Branched explorations from parent contexts
+3. **Hierarchy Depth**: Unlimited nesting levels
+4. **Context Preservation**: Each card maintains full conversation history
+
+## 🌐 Browser Compatibility
+
+- **Chrome/Edge**: Full feature support
+- **Firefox**: Full feature support
+- **Safari**: Full feature support
+- **Mobile Browsers**: Touch-optimized experience
+
+## 🔧 Development
+
+### Project Structure
 ```
 /src
-|-- /components
-|   |-- CardStack.tsx       # Renders the main 3D card stack view (Current & Parent cards)
-|   |-- InputArea.tsx       # The user input field with file handling and model selection
-|   |-- ProjectPanel.tsx    # The left panel for creating, deleting, and switching between projects
-|   |-- SettingsModal.tsx   # Modal for configuring API credentials, models, and system prompts
-|   |-- TreeNavigation.tsx  # The right panel for the 2D tree visualization of the entire card hierarchy
-|
-|-- /hooks
-|   |-- useInputAreaHeight.ts # A custom hook to dynamically measure and share the height of the input area
-|
-|-- /stores
-|   |-- projectStore.ts     # Top-level store. Manages the list of all projects. Handles creating, deleting, and setting the active project. Persists to local storage.
-|   |-- cardStore.ts        # Manages cards for the *active* project. Handles the card hierarchy, content (messages), and actions like adding/deleting cards and generating titles with AI.
-|   |-- settingsStore.ts    # Manages shared settings: API credentials, model selection, UI state (e.g., modal visibility), and the system prompts that guide AI behavior.
-|
-|-- App.tsx                 # Main application component, lays out the primary UI panels and handles responsive logic
-|-- main.tsx                # Application entry point, renders the App component
+├── components/     # UI Components
+│   ├── CardStack.tsx
+│   ├── InputArea.tsx
+│   ├── ProjectPanel.tsx
+│   └── TreeNavigation.tsx
+├── stores/         # State Management
+│   ├── cardStore.ts
+│   ├── projectStore.ts
+│   └── settingsStore.ts
+├── hooks/          # Custom Hooks
+├── App.tsx         # Main Application
+└── main.tsx        # React Entry Point
 ```
 
-## Data Model
+## 🙏 Acknowledgments
 
-The application's data is structured around three core interfaces, defined in the store files.
+- Built with modern web technologies
+- Inspired by the need for better knowledge exploration tools
+- Designed for researchers, educators, and curious minds
 
-### `Project`
-Defined in `projectStore.ts`. This is the top-level container for a knowledge tree.
--   `id: string`: A unique identifier for the project.
--   `name: string`: The user-defined name of the project.
--   `cards: CardData[]`: An array containing all the cards belonging to this project.
--   `currentCardId: string | null`: The ID of the currently focused card in the UI.
--   `createdAt: number`: A timestamp for when the project was created.
+---
 
-### `CardData`
-Defined in `cardStore.ts`. This represents a single card (or node) in a project's knowledge tree.
--   `id: string`: A unique identifier for the card.
--   `title: string`: The title of the card, often auto-generated by the AI.
--   `messages: CardMessage[]`: An array of messages that make up the conversation on the card.
--   `parentId?: string`: The ID of the parent card, establishing the hierarchy.
--   `children: string[]`: An array of IDs of direct child cards.
--   `depth: number`: The card's depth in the tree, used for layout calculations.
-
-### `CardMessage`
-Defined in `cardStore.ts`. This represents a single message within a card's conversation.
--   `id: string`: A unique identifier for the message.
--   `role: 'user' | 'ai'`: Specifies who sent the message.
--   `content: string`: The text content of the message.
--   `files?: string[]`: An array of attached file identifiers.
--   `context?: string`: Optional context, e.g., text selected from a parent card to start a new branch.
-
-## Contributing
-
-Contributions are what make the open-source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
-
-If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
-
-1.  Fork the Project
-2.  Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
-3.  Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
-4.  Push to the Branch (`git push origin feature/AmazingFeature`)
-5.  Open a Pull Request
-
-## License
-
-Distributed under the MIT License. See `LICENSE` for more information.
+**Experience the future of conversations - break free from linear thinking with Explore!**
